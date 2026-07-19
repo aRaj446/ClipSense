@@ -8,9 +8,9 @@ interface Props extends ButtonHTMLAttributes<HTMLButtonElement> {
 }
 
 const variants = {
-  primary: 'bg-primary hover:bg-primary-hover text-white',
-  danger: 'bg-red-600 hover:bg-red-700 text-white',
-  ghost: 'bg-transparent border border-surface-border hover:bg-surface-card text-slate-300',
+  primary: 'bg-gradient-primary hover:opacity-90 text-white shadow-glow-sm hover:shadow-glow-md active:scale-[0.97]',
+  danger:  'bg-red-600 hover:bg-red-500 text-white active:scale-[0.97]',
+  ghost:   'bg-transparent border border-surface-border hover:border-primary/40 hover:bg-surface-raised hover:shadow-glow-sm text-slate-300 active:scale-[0.97]',
 }
 
 export default function Button({
@@ -27,7 +27,7 @@ export default function Button({
       {...rest}
       disabled={disabled || loading}
       className={`inline-flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium
-        transition-colors disabled:opacity-50 disabled:cursor-not-allowed
+        transition-all duration-150 disabled:opacity-50 disabled:cursor-not-allowed
         ${variants[variant]} ${className}`}
     >
       {loading ? <LoadingSpinner size={16} /> : icon}

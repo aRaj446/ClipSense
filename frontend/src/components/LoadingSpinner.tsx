@@ -4,26 +4,40 @@ interface Props {
 }
 
 export default function LoadingSpinner({ size = 24, className = '' }: Props) {
+  const r = (size / 2) * 0.75
+  const cx = size / 2
+  const circumference = 2 * Math.PI * r
+
   return (
     <svg
-      className={`animate-spin text-primary ${className}`}
       width={size}
       height={size}
-      viewBox="0 0 24 24"
+      viewBox={`0 0 ${size} ${size}`}
       fill="none"
+      className={`animate-spin ${className}`}
+      style={{ filter: 'drop-shadow(0 0 4px #2563EB60)' }}
     >
+      <defs>
+        <linearGradient id="spinner-gradient" x1="0%" y1="0%" x2="100%" y2="100%">
+          <stop offset="0%"   stopColor="#2563EB" stopOpacity="1" />
+          <stop offset="100%" stopColor="#7C3AED" stopOpacity="0.2" />
+        </linearGradient>
+      </defs>
+      {/* Track */}
       <circle
-        className="opacity-25"
-        cx="12"
-        cy="12"
-        r="10"
-        stroke="currentColor"
-        strokeWidth="4"
+        cx={cx} cy={cx} r={r}
+        stroke="#1C2A3F"
+        strokeWidth={size * 0.12}
       />
-      <path
-        className="opacity-75"
-        fill="currentColor"
-        d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z"
+      {/* Arc */}
+      <circle
+        cx={cx} cy={cx} r={r}
+        stroke="url(#spinner-gradient)"
+        strokeWidth={size * 0.12}
+        strokeLinecap="round"
+        strokeDasharray={circumference}
+        strokeDashoffset={circumference * 0.75}
+        transform={`rotate(-90 ${cx} ${cx})`}
       />
     </svg>
   )
