@@ -101,7 +101,7 @@ async def upload_feedback_file(
     # .json / .csv → structured parser
     try:
         if ext == ".txt":
-            segments = _structuring_agent.parse(raw_text)
+            segments = _structuring_agent.parse(raw_text)  # HuggingFace zero-shot or regex fallback
             source   = "file_upload_txt"
         else:
             segments = _parse_file(raw_text, ext)
@@ -153,8 +153,7 @@ def analyze_feedback(
 ):
     """
     Submit raw unstructured feedback text.
-    Currently uses regex-based parsing.
-    Will be replaced with Gemini 2.5 Pro in a future phase.
+    Uses HuggingFace zero-shot classification (facebook/bart-large-mnli) or regex fallback.
     """
     project = _project_service.get_project(body.project_id)
     if not project:
@@ -339,8 +338,8 @@ def _parse_file(raw_text: str, ext: str) -> list[FeedbackSegment]:
     Supports .json and .csv.
     Raises ValueError with a descriptive message on invalid structure.
 
-    When Gemini 2.5 Pro is integrated, unstructured files will be pre-processed
-    by the LLM before reaching this function — the output contract stays identical.
+    Structured files (.json, .csv) are parsed directly.
+    Unstructured .txt files go through FeedbackStructuringAgent (HuggingFace or regex).
     """
     if ext == ".json":
         return _parse_json(raw_text)

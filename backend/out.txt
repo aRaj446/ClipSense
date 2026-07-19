@@ -1,0 +1,14 @@
+PASS  no genai VRA
+PASS  no _execute_plan VRA
+PASS  no genai STA
+PASS  no _call_gemini STA
+PASS  MIN_CLIP=6
+PASS  mood_group
+PASS  engagement_score
+PASS  unanchored
+PASS  sample_summaries
+PASS  VRA engagement_score
+PASS  STA analyse
+PASS  STA plan
+
+ALL PASSED
