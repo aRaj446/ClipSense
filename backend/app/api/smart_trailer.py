@@ -13,15 +13,19 @@ Endpoints:
 import os
 import uuid
 import json
+import logging
+import traceback
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, UploadFile, File, HTTPException, Depends
+from fastapi import APIRouter, UploadFile, File, HTTPException, Depends, BackgroundTasks
 from sqlalchemy.orm import Session
 
 from app.models.smart_trailer_job import SmartTrailerJob
 from app.schemas.feedback import SmartTrailerJobResponse
 from app.db.database import get_db
 from app.utils.storage import SMART_UPLOAD_DIR, TRAILERS_DIR
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/smart-trailer", tags=["Smart Trailer"])
 
@@ -30,9 +34,9 @@ ALLOWED_COMMENTS_EXTS = {".json", ".csv", ".txt"}
 
 
 def _save_upload(file: UploadFile, dest_dir: str, suffix: str) -> str:
-    ext = os.path.splitext(file.filename or "")[1].lower()
+    ext      = os.path.splitext(file.filename or "")[1].lower()
     filename = f"{uuid.uuid4().hex}{suffix}{ext}"
-    path = os.path.join(dest_dir, filename)
+    path     = os.path.join(dest_dir, filename)
     with open(path, "wb") as f:
         f.write(file.file.read())
     return path
@@ -68,7 +72,7 @@ def _serialise(job: SmartTrailerJob) -> SmartTrailerJobResponse:
         analysis_report=analysis_report,
         platform=job.platform,
         clip_score=job.clip_score,
-        gemini_used=job.gemini_used == "true" if job.gemini_used is not None else None,
+        gemini_used=False,
         fallback_warning=job.fallback_warning,
         error_message=job.error_message,
         created_at=job.created_at.isoformat(),
@@ -76,7 +80,7 @@ def _serialise(job: SmartTrailerJob) -> SmartTrailerJobResponse:
     )
 
 
-# POST /smart-trailer/upload
+# ── POST /smart-trailer/upload ────────────────────────────────────────────────
 
 @router.post("/upload", response_model=SmartTrailerJobResponse, status_code=201)
 async def upload_smart_trailer_files(
@@ -120,14 +124,14 @@ async def upload_smart_trailer_files(
     return _serialise(job)
 
 
-# POST /smart-trailer/generate/{job_id}
+# ── POST /smart-trailer/generate/{job_id} ────────────────────────────────────
 
 @router.post("/generate/{job_id}", response_model=SmartTrailerJobResponse, status_code=202)
 def generate_smart_trailer(
     job_id: str,
+    background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
 ):
-    import threading
     job = db.query(SmartTrailerJob).filter(SmartTrailerJob.id == job_id).first()
     if not job:
         raise HTTPException(404, "Job not found")
@@ -139,23 +143,19 @@ def generate_smart_trailer(
     job.updated_at    = datetime.now(timezone.utc)
     db.commit()
 
-    t = threading.Thread(target=_run_smart_job, kwargs={"job_id": job_id}, daemon=True)
-    t.start()
-    import sys
-    print(f"[GENERATE] thread started for job {job_id}, alive={t.is_alive()}", flush=True, file=sys.stderr)
+    background_tasks.add_task(_run_smart_job, job_id=job_id)
+    logger.info("SmartTrailer: background task queued for job %s", job_id)
     return _serialise(job)
 
 
-# GET /smart-trailer/job/{job_id}
-# NOTE: /job/{job_id}/analytics is registered first so FastAPI doesn't swallow
-# the literal path segment "analytics" as a job_id value.
+# ── GET /smart-trailer/job/{job_id}/analytics ─────────────────────────────────
+# Registered before /job/{job_id} so FastAPI doesn't treat "analytics" as a job_id
 
 @router.get("/job/{job_id}/analytics")
 def get_smart_job_analytics(job_id: str, db: Session = Depends(get_db)):
     """
     Re-parse the uploaded comments file through FeedbackStructuringAgent
     then run AnalyticsAgent on the resulting segments.
-    Returns the same AnalyticsReport shape as GET /analytics/{dataset_id}.
     """
     from app.services.feedback_structuring_agent import FeedbackStructuringAgent
     from app.services.analytics_agent import AnalyticsAgent
@@ -178,6 +178,8 @@ def get_smart_job_analytics(job_id: str, db: Session = Depends(get_db)):
     return AnalyticsAgent().analyze(segments)
 
 
+# ── GET /smart-trailer/job/{job_id} ──────────────────────────────────────────
+
 @router.get("/job/{job_id}", response_model=SmartTrailerJobResponse)
 def get_smart_job(job_id: str, db: Session = Depends(get_db)):
     job = db.query(SmartTrailerJob).filter(SmartTrailerJob.id == job_id).first()
@@ -186,7 +188,7 @@ def get_smart_job(job_id: str, db: Session = Depends(get_db)):
     return _serialise(job)
 
 
-# GET /smart-trailer/jobs
+# ── GET /smart-trailer/jobs ───────────────────────────────────────────────────
 
 @router.get("/jobs", response_model=list[SmartTrailerJobResponse])
 def list_smart_jobs(db: Session = Depends(get_db)):
@@ -198,7 +200,7 @@ def list_smart_jobs(db: Session = Depends(get_db)):
     return [_serialise(j) for j in jobs]
 
 
-# DELETE /smart-trailer/job/{job_id}
+# ── DELETE /smart-trailer/job/{job_id} ───────────────────────────────────────
 
 @router.delete("/job/{job_id}", status_code=204)
 def delete_smart_job(job_id: str, db: Session = Depends(get_db)):
@@ -221,7 +223,7 @@ def delete_smart_job(job_id: str, db: Session = Depends(get_db)):
     db.commit()
 
 
-# POST /smart-trailer/job/{job_id}/cancel
+# ── POST /smart-trailer/job/{job_id}/cancel ───────────────────────────────────
 
 @router.post("/job/{job_id}/cancel", response_model=SmartTrailerJobResponse)
 def cancel_smart_job(job_id: str, db: Session = Depends(get_db)):
@@ -239,93 +241,60 @@ def cancel_smart_job(job_id: str, db: Session = Depends(get_db)):
     return _serialise(job)
 
 
-# Background task
+# ── Background task ───────────────────────────────────────────────────────────
 
 def _run_smart_job(job_id: str) -> None:
     from app.db.database import SessionLocal
     from app.services.smart_trailer_agent import SmartTrailerAgent
-    import os, traceback
-
-    _LOG_PATH = r"C:\Users\7000039334\Documents\Gearshift\Clipsense\backend\thread_env.log"
-
-    try:
-        with open(_LOG_PATH, "a") as f:
-            f.write(f"job_id={job_id}\n")
-            f.write(f"FREE={os.getenv('GEMINI_FREE_API_KEY', 'MISSING')[:10]}\n")
-            f.write(f"PAID={os.getenv('GEMINI_PAID_API_KEY', 'MISSING')[:10]}\n")
-            import google.genai as genai
-            f.write(f"genai_file={genai.__file__}\n")
-            try:
-                client = genai.Client(api_key=os.getenv('GEMINI_FREE_API_KEY'))
-                r = client.models.generate_content(model='models/gemini-3.1-flash-lite', contents='hi')
-                f.write(f"thread_live_call=OK: {r.text[:20]}\n")
-            except Exception:
-                f.write(f"thread_live_call=FAILED:\n{traceback.format_exc()}\n")
-            f.flush()
-    except Exception:
-        pass
 
     db = SessionLocal()
     try:
         job = db.query(SmartTrailerJob).filter(SmartTrailerJob.id == job_id).first()
         if not job:
+            logger.error("SmartTrailer: job %s not found in DB", job_id)
             return
 
         job.status     = "processing"
         job.updated_at = datetime.now(timezone.utc)
         db.commit()
-
-        import traceback, sys
-        _LOG = open("smart_job_debug.log", "a", buffering=1)
+        logger.info("SmartTrailer: job %s started", job_id)
 
         agent = SmartTrailerAgent()
-        try:
-            output_path, plan, analysis, error, platform, clip_score, gemini_used, fallback_warning = agent.generate(
-                raw_footage_path=job.raw_footage_path,
-                sample_trailer_path=job.sample_trailer_path,
-                comments_path=job.comments_path,
-                job_id=job_id,
-            )
-        except Exception:
-            tb = traceback.format_exc()
-            _LOG.write("[SMART JOB] agent.generate() raised:\n" + tb + "\n")
-            _LOG.flush()
-            job.status        = "failed"
-            job.error_message = tb
-            job.updated_at    = datetime.now(timezone.utc)
-            db.commit()
-            return
-        finally:
-            _LOG.close()
+        output_path, plan, analysis, error, platform, clip_score, _, fallback_warning = agent.generate(
+            raw_footage_path=job.raw_footage_path,
+            sample_trailer_path=job.sample_trailer_path,
+            comments_path=job.comments_path,
+            job_id=job_id,
+        )
 
         if error or not output_path:
             job.status        = "failed"
             job.error_message = error or "Unknown error"
+            logger.error("SmartTrailer: job %s failed — %s", job_id, job.error_message)
         else:
             job.status           = "done"
             job.output_path      = output_path
             job.platform         = platform
             job.clip_score       = clip_score
-            job.gemini_used      = str(gemini_used).lower()
+            job.gemini_used      = "false"
             job.fallback_warning = fallback_warning
             if plan:
                 job.editing_plan = plan.model_dump_json()
             if analysis:
                 job.analysis_report = analysis.model_dump_json()
+            logger.info("SmartTrailer: job %s done — %s", job_id, output_path)
 
         job.updated_at = datetime.now(timezone.utc)
         db.commit()
 
-    except Exception as exc:
-        import traceback, sys
-        print("[SMART JOB ERROR] Full traceback:", flush=True, file=sys.stderr)
-        traceback.print_exc(file=sys.stderr)
-        sys.stderr.flush()
+    except Exception:
+        tb = traceback.format_exc()
+        logger.error("SmartTrailer: job %s raised exception:\n%s", job_id, tb)
         try:
             job = db.query(SmartTrailerJob).filter(SmartTrailerJob.id == job_id).first()
             if job:
                 job.status        = "failed"
-                job.error_message = traceback.format_exc()
+                job.error_message = tb[:2000]   # cap to avoid DB overflow
                 job.updated_at    = datetime.now(timezone.utc)
                 db.commit()
         except Exception:

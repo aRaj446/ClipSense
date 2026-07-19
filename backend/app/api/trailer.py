@@ -11,6 +11,7 @@ Endpoints:
 import uuid
 import json
 import os
+import logging
 from datetime import datetime, timezone
 from fastapi import APIRouter, HTTPException, Depends, BackgroundTasks
 from sqlalchemy.orm import Session
@@ -23,6 +24,7 @@ from app.schemas.feedback import (
 )
 from app.services.video_regeneration_agent import VideoRegenerationAgent
 from app.services.analytics_agent import AnalyticsAgent
+from app.services.video_optimization_agent import VideoOptimizationAgent
 from app.services.feedback_dataset_service import FeedbackDatasetService
 from app.services.project_service import ProjectService
 from app.models.trailer_job import TrailerJob
@@ -30,8 +32,11 @@ from app.db.database import get_db
 
 router = APIRouter()
 
+logger = logging.getLogger(__name__)
+
 _regen_agent     = VideoRegenerationAgent()
 _analytics_agent = AnalyticsAgent()
+_optim_agent     = VideoOptimizationAgent()
 _dataset_service = FeedbackDatasetService()
 _project_service = ProjectService()
 
@@ -178,6 +183,34 @@ def _run_job(
         ]
 
         analytics: AnalyticsReport = _analytics_agent.analyze(segments)
+
+        # Run VideoOptimizationAgent — its recommendations inform clip scoring
+        # by injecting high-priority positive timestamps back into the analytics
+        # timeline so VideoRegenerationAgent weights them higher.
+        recommendations, _ = _optim_agent.analyze(
+            segments=segments,
+            video_metadata=project,
+        )
+
+        # Promote high-priority positive timestamps into the analytics timeline
+        # so the clip planner treats them as anchor points
+        from app.schemas.feedback import TimelinePoint
+        boosted = set()
+        for rec in recommendations:
+            if rec.priority == "High" and rec.timestamp:
+                boosted.add(rec.timestamp)
+        if boosted:
+            existing_ts = {p.timestamp for p in analytics.timeline}
+            for rec in recommendations:
+                if rec.timestamp and rec.timestamp not in existing_ts:
+                    analytics.timeline.append(TimelinePoint(
+                        timestamp=rec.timestamp,
+                        topic=rec.action.split()[0] if rec.action else "General",
+                        sentiment="Positive",
+                        summary=rec.reason,
+                        confidence=0.85,
+                    ))
+            logger.info("trailer: injected %d optimization timestamps into analytics", len(boosted))
 
         video_duration = float(project.get("duration") or 0.0)
         output_path, plan, error, platform, clip_score, gemini_used, fallback_warning = _regen_agent.generate(

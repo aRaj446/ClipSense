@@ -12,8 +12,6 @@ except Exception:
     pass
 
 print("[STARTUP] CWD:", os.getcwd(), flush=True, file=sys.stderr)
-print("[STARTUP] FREE KEY:", os.getenv("GEMINI_FREE_API_KEY", "MISSING")[:10], flush=True, file=sys.stderr)
-print("[STARTUP] PAID KEY:", os.getenv("GEMINI_PAID_API_KEY", "MISSING")[:10], flush=True, file=sys.stderr)
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
