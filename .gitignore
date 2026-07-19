@@ -1,0 +1,42 @@
+# Dependencies
+node_modules/
+__pycache__/
+*.pyc
+*.pyo
+.env
+.env.local
+.env.production
+
+# Build
+dist/
+build/
+
+# Uploads & metadata (runtime data)
+backend/app/uploads/*
+backend/app/metadata/*
+!backend/app/uploads/.gitkeep
+!backend/app/metadata/.gitkeep
+
+# IDE
+.vscode/
+.idea/
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Python venv
+venv/
+.venv/
+
+# Logs
+*.log
+
+# Runtime generated files
+backend/app/trailers/*
+!backend/app/trailers/.gitkeep
+backend/app/clipsense.db
+backend/diag*.py
+backend/smart_job_debug.log
+backend/thread_env.log
