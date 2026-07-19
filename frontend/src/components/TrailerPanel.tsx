@@ -21,9 +21,16 @@ const STATUS_LABEL: Record<TrailerJob['status'], string> = {
   failed:     'Failed',
 }
 
+const STATUS_COLOR: Record<TrailerJob['status'], string> = {
+  done:       '#10B981',
+  failed:     '#EF4444',
+  processing: '#2563EB',
+  pending:    '#2563EB',
+}
+
 export default function TrailerPanel({ projectId, datasets }: Props) {
-  const { toast } = useToast()
-  const navigate = useNavigate()
+  const { toast }  = useToast()
+  const navigate   = useNavigate()
 
   const [selectedDs, setSelectedDs]   = useState<string>('')
   const [jobs, setJobs]               = useState<TrailerJob[]>([])
@@ -32,32 +39,22 @@ export default function TrailerPanel({ projectId, datasets }: Props) {
   const [activeJobId, setActiveJobId] = useState<string | null>(null)
   const pollRef                       = useRef<ReturnType<typeof setInterval> | null>(null)
 
-  // ── Load existing jobs on mount + resume polling for in-progress jobs ──────
   useEffect(() => {
     trailerService.listJobs(projectId)
       .then(existing => {
         setJobs(existing)
-        // resume polling for any job still in flight
-        const inFlight = existing.find(
-          j => j.status === 'pending' || j.status === 'processing'
-        )
-        if (inFlight) {
-          setGenerating(true)
-          setActiveJobId(inFlight.id)
-        }
+        const inFlight = existing.find(j => j.status === 'pending' || j.status === 'processing')
+        if (inFlight) { setGenerating(true); setActiveJobId(inFlight.id) }
       })
       .catch(() => {})
       .finally(() => setLoadingJobs(false))
   }, [projectId])
 
-  // Auto-select first dataset; re-select if current selection no longer exists
   useEffect(() => {
     if (datasets.length === 0) return
     const stillExists = datasets.some(ds => ds.id === selectedDs)
     if (!stillExists) setSelectedDs(datasets[0].id)
   }, [datasets])
-
-  // ── Polling ───────────────────────────────────────────────────────────────
 
   useEffect(() => {
     if (!activeJobId) return
@@ -77,8 +74,6 @@ export default function TrailerPanel({ projectId, datasets }: Props) {
     return () => clearInterval(pollRef.current!)
   }, [activeJobId])
 
-  // ── Generate ──────────────────────────────────────────────────────────────
-
   async function handleGenerate() {
     if (!selectedDs) return
     setGenerating(true)
@@ -89,8 +84,7 @@ export default function TrailerPanel({ projectId, datasets }: Props) {
       toast('Trailer job started — processing in background.')
       navigate('/trailers')
     } catch (err: unknown) {
-      const msg = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail
-        ?? 'Failed to start trailer generation.'
+      const msg = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail ?? 'Failed to start trailer generation.'
       toast(msg, 'error')
       setGenerating(false)
     }
@@ -105,8 +99,7 @@ export default function TrailerPanel({ projectId, datasets }: Props) {
       setActiveJobId(job.id)
       toast('Retrying trailer generation…')
     } catch (err: unknown) {
-      const msg = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail
-        ?? 'Failed to retry trailer generation.'
+      const msg = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail ?? 'Failed to retry trailer generation.'
       toast(msg, 'error')
       setGenerating(false)
     }
@@ -121,9 +114,7 @@ export default function TrailerPanel({ projectId, datasets }: Props) {
       setActiveJobId(null)
       setGenerating(false)
       toast('Trailer generation cancelled.')
-    } catch {
-      toast('Failed to cancel job.', 'error')
-    }
+    } catch { toast('Failed to cancel job.', 'error') }
   }
 
   async function handleDelete(jobId: string) {
@@ -131,9 +122,7 @@ export default function TrailerPanel({ projectId, datasets }: Props) {
       await trailerService.deleteJob(jobId)
       setJobs(prev => prev.filter(j => j.id !== jobId))
       toast('Trailer deleted.')
-    } catch {
-      toast('Failed to delete trailer.', 'error')
-    }
+    } catch { toast('Failed to delete trailer.', 'error') }
   }
 
   const activeJob     = jobs.find(j => j.id === activeJobId)
@@ -142,13 +131,11 @@ export default function TrailerPanel({ projectId, datasets }: Props) {
   return (
     <Card className="space-y-5">
 
-      {/* ── Header ───────────────────────────────────────────────────────── */}
+      {/* Header */}
       <div className="flex items-center gap-2">
         <Sparkles size={16} className="text-primary" />
         <h2 className="font-semibold text-slate-100">Video Generation</h2>
-        {loadingJobs && (
-          <Loader2 size={13} className="text-slate-500 animate-spin ml-1" />
-        )}
+        {loadingJobs && <Loader2 size={13} className="text-slate-500 animate-spin ml-1" />}
         {completedJobs.length > 0 && (
           <span className="ml-auto text-xs px-2 py-0.5 rounded-full bg-primary/15 text-primary border border-primary/20">
             {completedJobs.length} variant{completedJobs.length !== 1 ? 's' : ''} ready
@@ -156,9 +143,9 @@ export default function TrailerPanel({ projectId, datasets }: Props) {
         )}
       </div>
 
-      {/* ── Generate controls ─────────────────────────────────────────────── */}
+      {/* Controls */}
       <p className="text-sm text-slate-400 leading-relaxed">
-        Select a feedback dataset. Gemini reads the sentiment analytics and decides
+        Select a feedback dataset. The AI reads the sentiment analytics and decides
         which segments to include. FFmpeg assembles the final clip.
       </p>
 
@@ -181,52 +168,58 @@ export default function TrailerPanel({ projectId, datasets }: Props) {
           </select>
           <ChevronDown size={14} className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-500 pointer-events-none" />
         </div>
-
-        <Button
-          onClick={handleGenerate}
-          loading={generating}
-          disabled={!selectedDs || generating}
-          icon={<Clapperboard size={14} />}
-        >
+        <Button onClick={handleGenerate} loading={generating} disabled={!selectedDs || generating} icon={<Clapperboard size={14} />}>
           {generating ? 'Generating…' : 'Generate Trailer'}
         </Button>
       </div>
 
-      {/* ── Active job progress ───────────────────────────────────────────── */}
+      {/* Active job banner */}
       {activeJob && (activeJob.status === 'pending' || activeJob.status === 'processing') && (
-        <div className="flex items-center gap-3 bg-surface border border-surface-border rounded-lg px-4 py-3">
+        <div
+          className="flex items-center gap-3 rounded-lg px-4 py-3"
+          style={{
+            background: 'linear-gradient(135deg,#2563EB0A,#7C3AED08)',
+            border: '1px solid #2563EB20',
+            borderLeft: '3px solid #2563EB',
+          }}
+        >
           <Loader2 size={16} className="text-primary animate-spin shrink-0" />
           <div className="flex-1 min-w-0">
             <p className="text-slate-200 text-sm font-medium">{STATUS_LABEL[activeJob.status]}</p>
-            <p className="text-slate-500 text-xs mt-0.5">
-              Gemini is analysing sentiment data and planning the edit…
-            </p>
+            <p className="text-slate-500 text-xs mt-0.5">Analysing sentiment data and planning the edit…</p>
           </div>
           <span className="text-xs text-slate-600">{activeJob.id.slice(0, 8)}…</span>
           <button
             onClick={handleCancel}
             className="flex items-center gap-1 text-xs px-2.5 py-1.5 rounded-lg border border-red-500/30 text-red-400 hover:bg-red-500/10 transition-colors shrink-0"
-            title="Stop generation"
           >
             <Square size={11} /> Stop
           </button>
         </div>
       )}
 
-      {/* ── Job list ──────────────────────────────────────────────────────── */}
+      {/* Job list */}
       {jobs.length > 0 && (
         <div className="space-y-2">
           <p className="text-xs text-slate-500 font-medium uppercase tracking-wide">Generated Trailers</p>
           {jobs.map(job => (
-            <div key={job.id} className="border border-surface-border rounded-lg overflow-hidden">
-
-              <div className="flex items-center gap-3 px-4 py-3 bg-surface">
+            <div
+              key={job.id}
+              className="rounded-lg overflow-hidden"
+              style={{
+                border: `1px solid ${STATUS_COLOR[job.status]}20`,
+                borderLeft: `3px solid ${STATUS_COLOR[job.status]}`,
+              }}
+            >
+              <div
+                className="flex items-center gap-3 px-4 py-3"
+                style={{ background: 'linear-gradient(145deg,#0E1525,#141E30)' }}
+              >
                 {job.status === 'done'   && <CheckCircle size={14} className="text-green-400 shrink-0" />}
-                {job.status === 'failed' && <XCircle size={14} className="text-red-400 shrink-0" />}
+                {job.status === 'failed' && <XCircle     size={14} className="text-red-400 shrink-0" />}
                 {(job.status === 'pending' || job.status === 'processing') && (
                   <Loader2 size={14} className="text-primary animate-spin shrink-0" />
                 )}
-
                 <div className="flex-1 min-w-0">
                   <p className="text-slate-300 text-sm font-medium">
                     {STATUS_LABEL[job.status]}
@@ -239,34 +232,17 @@ export default function TrailerPanel({ projectId, datasets }: Props) {
                       <span className="ml-2 text-xs text-slate-500 font-normal capitalize">· {job.platform}</span>
                     )}
                   </p>
-                  {job.error_message && (
-                    <p className="text-red-400 text-xs mt-0.5 truncate">{job.error_message}</p>
-                  )}
-                  {job.editing_plan?.rationale && (
-                    <p className="text-slate-500 text-xs mt-0.5 truncate">{job.editing_plan.rationale}</p>
-                  )}
+                  {job.error_message && <p className="text-red-400 text-xs mt-0.5 truncate">{job.error_message}</p>}
+                  {job.editing_plan?.rationale && <p className="text-slate-500 text-xs mt-0.5 truncate">{job.editing_plan.rationale}</p>}
                 </div>
-
-                <span className="text-xs text-slate-600 shrink-0 hidden sm:inline">
-                  {new Date(job.updated_at).toLocaleString()}
-                </span>
-
+                <span className="text-xs text-slate-600 shrink-0 hidden sm:inline">{new Date(job.updated_at).toLocaleString()}</span>
                 {job.status === 'failed' && (
-                  <button
-                    onClick={() => handleRetry(job.dataset_id)}
-                    disabled={generating}
-                    className="text-slate-600 hover:text-slate-300 disabled:opacity-40 transition-colors shrink-0"
-                    title="Retry generation"
-                  >
+                  <button onClick={() => handleRetry(job.dataset_id)} disabled={generating} className="text-slate-600 hover:text-slate-300 disabled:opacity-40 transition-colors shrink-0">
                     <RefreshCw size={13} />
                   </button>
                 )}
                 {(job.status === 'done' || job.status === 'failed') && (
-                  <button
-                    onClick={() => handleDelete(job.id)}
-                    className="text-slate-600 hover:text-red-400 transition-colors shrink-0"
-                    title="Delete trailer"
-                  >
+                  <button onClick={() => handleDelete(job.id)} className="text-slate-600 hover:text-red-400 transition-colors shrink-0">
                     <Trash2 size={13} />
                   </button>
                 )}
@@ -274,19 +250,11 @@ export default function TrailerPanel({ projectId, datasets }: Props) {
 
               {job.status === 'done' && job.output_url && (
                 <div className="border-t border-surface-border bg-black">
-                  <video
-                    controls
-                    className="w-full max-h-64 object-contain"
-                    src={trailerService.trailerUrl(job.output_url)}
-                  >
+                  <video controls className="w-full max-h-64 object-contain" src={trailerService.trailerUrl(job.output_url)}>
                     Your browser does not support video playback.
                   </video>
                   <div className="px-4 py-2 flex items-center gap-3">
-                    <a
-                      href={trailerService.trailerUrl(job.output_url)}
-                      download
-                      className="flex items-center gap-1.5 text-xs text-primary hover:text-primary/80 transition-colors"
-                    >
+                    <a href={trailerService.trailerUrl(job.output_url)} download className="flex items-center gap-1.5 text-xs text-primary hover:text-primary/80 transition-colors">
                       <Play size={12} /> Download trailer
                     </a>
                     {job.clip_score !== null && (
@@ -301,7 +269,6 @@ export default function TrailerPanel({ projectId, datasets }: Props) {
           ))}
         </div>
       )}
-
 
     </Card>
   )

@@ -28,16 +28,21 @@ const SENTIMENT_COLORS: Record<string, string> = {
 const CHART_COLORS = ['#6366f1', '#22c55e', '#f59e0b', '#ef4444', '#60a5fa', '#a78bfa', '#34d399']
 
 const TOOLTIP_STYLE = {
-  backgroundColor: '#1e293b',
-  border: '1px solid #334155',
-  borderRadius: '8px',
+  backgroundColor: '#0E1525',
+  border: '1px solid #1C2A3F',
+  borderRadius: '10px',
   color: '#e2e8f0',
   fontSize: '12px',
+  boxShadow: '0 8px 32px 0 #00000060',
 }
 
 function SectionTitle({ icon, title }: { icon: React.ReactNode; title: string }) {
   return (
     <div className="flex items-center gap-2 mb-4">
+      <span
+        className="w-0.5 h-4 rounded-full shrink-0"
+        style={{ background: 'linear-gradient(180deg,#2563EB,#7C3AED)' }}
+      />
       <span className="text-primary">{icon}</span>
       <h3 className="font-semibold text-slate-100 text-sm">{title}</h3>
     </div>
@@ -137,15 +142,19 @@ export default function AnalyticsDashboard({ datasetId, datasetName, prefetchedR
       {/* ── Stat pills ──────────────────────────────────────────────────── */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
         {[
-          { label: 'Total Segments',  value: report.total_segments,                               color: 'text-primary' },
-          { label: 'Avg Confidence',  value: `${Math.round(report.confidence_stats.mean * 100)}%`, color: 'text-yellow-400' },
-          { label: 'High Confidence', value: report.confidence_stats.high_confidence_count,        color: 'text-green-400' },
-          { label: 'Topics Covered',  value: report.topic_breakdown.length,                        color: 'text-blue-400' },
+          { label: 'Total Segments',  value: report.total_segments,                                color: '#3B82F6', bg: 'linear-gradient(135deg,#2563EB18,#2563EB08)' },
+          { label: 'Avg Confidence',  value: `${Math.round(report.confidence_stats.mean * 100)}%`, color: '#F59E0B', bg: 'linear-gradient(135deg,#F59E0B18,#F59E0B08)' },
+          { label: 'High Confidence', value: report.confidence_stats.high_confidence_count,        color: '#10B981', bg: 'linear-gradient(135deg,#10B98118,#10B98108)' },
+          { label: 'Topics Covered',  value: report.topic_breakdown.length,                        color: '#7C3AED', bg: 'linear-gradient(135deg,#7C3AED18,#7C3AED08)' },
         ].map(s => (
-          <Card key={s.label} className="text-center py-3">
-            <p className={`text-2xl font-bold ${s.color}`}>{s.value}</p>
+          <div
+            key={s.label}
+            className="rounded-xl p-4 text-center border"
+            style={{ background: s.bg, borderColor: `${s.color}20` }}
+          >
+            <p className="text-2xl font-bold" style={{ color: s.color }}>{s.value}</p>
             <p className="text-xs text-slate-500 mt-0.5">{s.label}</p>
-          </Card>
+          </div>
         ))}
       </div>
 
@@ -319,17 +328,25 @@ export default function AnalyticsDashboard({ datasetId, datasetName, prefetchedR
       {/* ── Row 4: Top Issues & Positives detail ───────────────────────── */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
         {[
-          { title: 'Top Positives', items: report.top_positives, color: 'text-green-400', bg: 'bg-green-500/10', border: 'border-green-500/20' },
-          { title: 'Top Issues',    items: report.top_issues,    color: 'text-red-400',   bg: 'bg-red-500/10',   border: 'border-red-500/20' },
+          { title: 'Top Positives', items: report.top_positives, color: '#10B981', bg: 'linear-gradient(135deg,#10B98110,#10B98106)', border: '#10B98120' },
+          { title: 'Top Issues',    items: report.top_issues,    color: '#EF4444', bg: 'linear-gradient(135deg,#EF444410,#EF444406)', border: '#EF444420' },
         ].map(({ title, items, color, bg, border }) => (
           <Card key={title}>
             <SectionTitle icon={<BarChart2 size={14} />} title={title} />
             <div className="space-y-2">
               {items.length === 0 && <p className="text-slate-500 text-xs">None detected.</p>}
               {items.map((item, i) => (
-                <div key={i} className={`rounded-lg px-3 py-2 border ${bg} ${border}`}>
+                <div
+                  key={i}
+                  className="rounded-lg px-3 py-2.5 border"
+                  style={{
+                    background: bg,
+                    borderColor: border,
+                    borderLeft: `3px solid ${color}`,
+                  }}
+                >
                   <div className="flex items-center justify-between gap-2">
-                    <span className={`text-sm font-medium ${color} truncate`}>{item.topic}</span>
+                    <span className="text-sm font-medium truncate" style={{ color }}>{item.topic}</span>
                     <span className="text-xs text-slate-500 shrink-0">{item.count} mentions · {Math.round(item.avg_confidence * 100)}% conf</span>
                   </div>
                   <p className="text-xs text-slate-400 mt-0.5 line-clamp-2">{item.sample_summary}</p>

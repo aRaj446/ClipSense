@@ -1,4 +1,4 @@
-import { useEffect, useState, useMemo } from 'react'
+import { useEffect, useState, useMemo, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
   FolderOpen, Video, Clapperboard, TrendingUp,
@@ -24,21 +24,54 @@ const PLATFORM_META: Record<string, { label: string; icon: ReactNode; color: str
 
 const PLATFORMS = ['youtube', 'instagram', 'tiktok', 'twitter']
 
+// ── Animated counter ──────────────────────────────────────────────────────────
+
+function AnimatedNumber({ target }: { target: number }) {
+  const [display, setDisplay] = useState(0)
+  const raf = useRef<number>(0)
+  useEffect(() => {
+    const start = performance.now()
+    const duration = 700
+    function step(now: number) {
+      const t = Math.min((now - start) / duration, 1)
+      const ease = 1 - Math.pow(1 - t, 3)
+      setDisplay(Math.round(ease * target))
+      if (t < 1) raf.current = requestAnimationFrame(step)
+    }
+    raf.current = requestAnimationFrame(step)
+    return () => cancelAnimationFrame(raf.current)
+  }, [target])
+  return <>{display}</>
+}
+
+// ── Stat card ─────────────────────────────────────────────────────────────────
+
 interface StatCardProps {
   label: string
   value: string | number
   icon: ReactNode
+  iconBg: string
   placeholder?: boolean
+  delay?: number
 }
 
-function StatCard({ label, value, icon, placeholder }: StatCardProps) {
+function StatCard({ label, value, icon, iconBg, placeholder, delay = 0 }: StatCardProps) {
   return (
-    <Card className="flex items-center gap-4">
-      <div className="p-3 bg-primary/10 rounded-lg shrink-0">{icon}</div>
+    <Card
+      variant="glow"
+      animate
+      className="flex items-center gap-4"
+      style={{ animationDelay: `${delay}ms` } as React.CSSProperties}
+    >
+      <div className="p-3 rounded-xl shrink-0" style={{ background: iconBg }}>
+        {icon}
+      </div>
       <div>
         <p className="text-2xl font-bold text-slate-100">
           {placeholder ? (
             <span className="text-slate-500 text-sm font-normal">Coming soon</span>
+          ) : typeof value === 'number' ? (
+            <AnimatedNumber target={value} />
           ) : value}
         </p>
         <p className="text-sm text-slate-400">{label}</p>
@@ -47,7 +80,8 @@ function StatCard({ label, value, icon, placeholder }: StatCardProps) {
   )
 }
 
-// Unified trailer card — handles both standard and smart
+// ── Trailer card ──────────────────────────────────────────────────────────────
+
 function TrailerCard({ job, winnerMap }: {
   job: TrailerJob | SmartTrailerJob
   winnerMap: Record<string, string>
@@ -62,7 +96,14 @@ function TrailerCard({ job, winnerMap }: {
     : trailerService.trailerUrl((job as TrailerJob).output_url!)
 
   return (
-    <div className={`bg-surface-card rounded-xl overflow-hidden border-2 transition-colors ${isWinner ? 'border-yellow-400/60' : 'border-surface-border'}`}>
+    <div
+      className="rounded-xl overflow-hidden transition-all duration-200 hover:-translate-y-0.5"
+      style={{
+        background: 'linear-gradient(145deg, #0E1525, #141E30)',
+        border: `2px solid ${isWinner ? '#FACC1560' : '#1C2A3F'}`,
+        boxShadow: isWinner ? '0 0 20px 0 #FACC1520' : '0 4px 24px 0 #00000040',
+      }}
+    >
       {job.output_url ? (
         <video controls className="w-full aspect-video object-contain bg-black" src={videoUrl} />
       ) : (
@@ -101,6 +142,8 @@ function TrailerCard({ job, winnerMap }: {
   )
 }
 
+// ── Dashboard ─────────────────────────────────────────────────────────────────
+
 export default function Dashboard() {
   const navigate = useNavigate()
   const { projects, loading } = useProjectFetch()
@@ -109,12 +152,8 @@ export default function Dashboard() {
   const [activeTab,        setActiveTab]        = useState<string>('all')
 
   useEffect(() => {
-    trailerService.listAllTrailers()
-      .then(t => setAllTrailers(t))
-      .catch(() => {})
-    smartTrailerService.listJobs()
-      .then(j => setAllSmartTrailers(j.filter(j => j.status === 'done')))
-      .catch(() => {})
+    trailerService.listAllTrailers().then(t => setAllTrailers(t)).catch(() => {})
+    smartTrailerService.listJobs().then(j => setAllSmartTrailers(j.filter(j => j.status === 'done'))).catch(() => {})
   }, [])
 
   const winnerMap = useMemo(() => {
@@ -129,21 +168,15 @@ export default function Dashboard() {
     return map
   }, [allTrailers])
 
-  // Filtered standard trailers by platform tab
-  const filteredStandard = activeTab === 'all'
-    ? allTrailers
-    : allTrailers.filter(j => j.platform === activeTab)
-
-  // Smart trailers don't have a platform — only show in 'all' tab
-  const filteredSmart = activeTab === 'all' ? allSmartTrailers : []
-
-  const totalTrailers = allTrailers.length + allSmartTrailers.length
+  const filteredStandard = activeTab === 'all' ? allTrailers : allTrailers.filter(j => j.platform === activeTab)
+  const filteredSmart    = activeTab === 'all' ? allSmartTrailers : []
+  const totalTrailers    = allTrailers.length + allSmartTrailers.length
 
   const stats = [
-    { label: 'Total Projects',    value: projects.length,  icon: <FolderOpen size={20} className="text-primary" /> },
-    { label: 'Videos Uploaded',   value: projects.length,  icon: <Video size={20} className="text-primary" /> },
-    { label: 'Trailers Generated', value: totalTrailers,   icon: <Clapperboard size={20} className="text-primary" /> },
-    { label: 'Optimization Score', value: '—',             icon: <TrendingUp size={20} className="text-primary" />, placeholder: true },
+    { label: 'Total Projects',     value: projects.length, icon: <FolderOpen   size={20} className="text-blue-400" />,   iconBg: 'linear-gradient(135deg,#2563EB22,#2563EB0A)' },
+    { label: 'Videos Uploaded',    value: projects.length, icon: <Video        size={20} className="text-purple-400" />, iconBg: 'linear-gradient(135deg,#7C3AED22,#7C3AED0A)' },
+    { label: 'Trailers Generated', value: totalTrailers,   icon: <Clapperboard size={20} className="text-cyan-400" />,   iconBg: 'linear-gradient(135deg,#06B6D422,#06B6D40A)' },
+    { label: 'Optimization Score', value: '—',             icon: <TrendingUp   size={20} className="text-amber-400" />,  iconBg: 'linear-gradient(135deg,#F59E0B22,#F59E0B0A)', placeholder: true },
   ]
 
   const tabs = ['all', ...PLATFORMS]
@@ -151,23 +184,39 @@ export default function Dashboard() {
   return (
     <div className="max-w-7xl mx-auto space-y-8">
 
-      {/* Header */}
-      <div className="flex items-center justify-between">
+      {/* ── Hero header ──────────────────────────────────────────────────── */}
+      <div
+        className="rounded-2xl p-6 flex items-center justify-between gap-4 animate-fade-in"
+        style={{
+          background: 'linear-gradient(135deg, #0E1525 0%, #141E30 60%, #0E1525 100%)',
+          border: '1px solid #1C2A3F',
+          boxShadow: '0 0 48px 0 #2563EB0A',
+        }}
+      >
         <div>
-          <h1 className="text-2xl font-bold text-slate-100">Dashboard</h1>
-          <p className="text-slate-400 mt-1">AI Marketing Optimization Platform</p>
+          <div className="flex items-center gap-2 mb-1">
+            <Sparkles size={13} className="text-primary" />
+            <span className="text-xs text-slate-500 font-medium tracking-widest uppercase">AI Marketing Platform</span>
+          </div>
+          <h1
+            className="text-3xl font-bold bg-clip-text text-transparent"
+            style={{ backgroundImage: 'linear-gradient(135deg, #e2e8f0 0%, #94a3b8 100%)' }}
+          >
+            Dashboard
+          </h1>
+          <p className="text-slate-400 mt-1 text-sm">Analyse audience feedback and generate optimised trailers.</p>
         </div>
-        <Button icon={<Upload size={16} />} onClick={() => navigate('/upload')}>
+        <Button icon={<Upload size={16} />} onClick={() => navigate('/upload')} className="shrink-0">
           Upload Video
         </Button>
       </div>
 
-      {/* Stats */}
+      {/* ── Stats ────────────────────────────────────────────────────────── */}
       <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
-        {stats.map(s => <StatCard key={s.label} {...s} />)}
+        {stats.map((s, i) => <StatCard key={s.label} {...s} delay={i * 60} />)}
       </div>
 
-      {/* Trailers */}
+      {/* ── Trailers ─────────────────────────────────────────────────────── */}
       {totalTrailers > 0 && (
         <div>
           <div className="flex items-center justify-between mb-4">
@@ -177,22 +226,26 @@ export default function Dashboard() {
             </button>
           </div>
 
-          {/* Platform filter tabs */}
+          {/* Platform tabs */}
           <div className="flex gap-2 flex-wrap mb-4">
             {tabs.map(tab => {
-              const meta = tab === 'all' ? null : PLATFORM_META[tab]
-              const count = tab === 'all'
-                ? totalTrailers
-                : allTrailers.filter(j => j.platform === tab).length
+              const meta  = tab === 'all' ? null : PLATFORM_META[tab]
+              const count = tab === 'all' ? totalTrailers : allTrailers.filter(j => j.platform === tab).length
+              const active = activeTab === tab
               return (
                 <button
                   key={tab}
                   onClick={() => setActiveTab(tab)}
-                  className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium border transition-colors ${
-                    activeTab === tab
-                      ? 'bg-primary/15 text-primary border-primary/30'
-                      : 'text-slate-400 border-surface-border hover:text-slate-100 hover:border-slate-500'
-                  }`}
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium border transition-all duration-150"
+                  style={active ? {
+                    background: 'linear-gradient(135deg,#2563EB18,#7C3AED12)',
+                    borderColor: '#2563EB30',
+                    color: '#3B82F6',
+                  } : {
+                    background: 'transparent',
+                    borderColor: '#1C2A3F',
+                    color: '#64748b',
+                  }}
                 >
                   {meta?.icon}
                   {meta?.label ?? 'All'}
@@ -202,7 +255,6 @@ export default function Dashboard() {
             })}
           </div>
 
-          {/* Grid — standard + smart (smart only in 'all' tab) */}
           <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-4">
             {filteredStandard.slice(0, 6).map(job => (
               <TrailerCard key={job.id} job={job} winnerMap={winnerMap} />
@@ -214,7 +266,7 @@ export default function Dashboard() {
         </div>
       )}
 
-      {/* Recent Projects */}
+      {/* ── Recent Projects ───────────────────────────────────────────────── */}
       <div>
         <h2 className="text-lg font-semibold text-slate-100 mb-4">Recent Projects</h2>
         {loading ? (
@@ -222,8 +274,13 @@ export default function Dashboard() {
             <LoadingSpinner size={32} />
           </div>
         ) : projects.length === 0 && allSmartTrailers.length === 0 ? (
-          <Card className="flex flex-col items-center justify-center py-16 text-center">
-            <AlertCircle size={40} className="text-slate-600 mb-4" />
+          <Card variant="gradient" className="flex flex-col items-center justify-center py-16 text-center">
+            <div
+              className="w-16 h-16 rounded-2xl flex items-center justify-center mb-4"
+              style={{ background: 'linear-gradient(135deg,#2563EB14,#7C3AED14)', border: '1px solid #2563EB20' }}
+            >
+              <AlertCircle size={28} className="text-slate-500" />
+            </div>
             <p className="text-slate-300 font-medium">No projects yet</p>
             <p className="text-slate-500 text-sm mt-1 mb-6">Upload your first video to get started</p>
             <Button icon={<Upload size={16} />} onClick={() => navigate('/upload')}>Upload Video</Button>
@@ -235,10 +292,20 @@ export default function Dashboard() {
               <div
                 key={job.id}
                 onClick={() => navigate(`/smart-trailer/${job.id}`)}
-                className="bg-surface-card border border-surface-border rounded-xl p-6 cursor-pointer hover:border-primary/50 hover:shadow-lg hover:shadow-primary/5 transition-all duration-200 group"
+                className="rounded-xl p-6 cursor-pointer transition-all duration-200 group hover:-translate-y-0.5"
+                style={{
+                  background: 'linear-gradient(145deg, #0E1525, #141E30)',
+                  border: '1px solid #1C2A3F',
+                  boxShadow: '0 4px 24px 0 #00000040',
+                }}
+                onMouseEnter={e => (e.currentTarget.style.borderColor = '#2563EB30')}
+                onMouseLeave={e => (e.currentTarget.style.borderColor = '#1C2A3F')}
               >
                 <div className="flex items-start justify-between mb-3">
-                  <div className="p-2 bg-primary/10 rounded-lg group-hover:bg-primary/20 transition-colors">
+                  <div
+                    className="p-2 rounded-lg transition-all duration-150"
+                    style={{ background: 'linear-gradient(135deg,#2563EB18,#7C3AED12)' }}
+                  >
                     <Sparkles size={20} className="text-primary" />
                   </div>
                   <span className="flex items-center gap-1 text-xs px-2 py-1 rounded-full font-medium bg-primary/10 text-primary border border-primary/20">
