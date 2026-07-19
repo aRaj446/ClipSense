@@ -8,9 +8,9 @@ interface Props {
 }
 
 const statusColors: Record<string, { text: string; bg: string; border: string }> = {
-  uploaded:   { text: 'text-blue-400',   bg: 'bg-blue-500/10',   border: 'border-blue-500/20' },
-  processing: { text: 'text-amber-400',  bg: 'bg-amber-500/10',  border: 'border-amber-500/20' },
-  done:       { text: 'text-green-400',  bg: 'bg-green-500/10',  border: 'border-green-500/20' },
+  uploaded:   { text: '#8B7CF6', bg: 'rgba(139,124,246,0.10)', border: 'rgba(139,124,246,0.22)' },
+  processing: { text: '#F59E0B', bg: 'rgba(245,158,11,0.10)',  border: 'rgba(245,158,11,0.22)' },
+  done:       { text: '#4ADE80', bg: 'rgba(74,222,128,0.10)',  border: 'rgba(74,222,128,0.22)' },
 }
 
 export default function VideoCard({ project }: Props) {
@@ -20,39 +20,42 @@ export default function VideoCard({ project }: Props) {
   return (
     <div
       onClick={() => navigate(`/project/${project.id}`)}
-      className="rounded-xl p-6 cursor-pointer transition-all duration-200 group hover:-translate-y-0.5"
+      className="rounded-2xl p-6 cursor-pointer transition-all duration-200 hover:-translate-y-0.5"
       style={{
-        background: 'linear-gradient(145deg, #0E1525, #141E30)',
-        border: '1px solid #1C2A3F',
-        boxShadow: '0 4px 24px 0 #00000040',
+        background: 'linear-gradient(145deg, #13131F, #1A1A2E)',
+        border: '1px solid #252538',
+        boxShadow: '0 2px 20px 0 #00000045',
       }}
-      onMouseEnter={e => (e.currentTarget.style.borderColor = '#2563EB30')}
-      onMouseLeave={e => (e.currentTarget.style.borderColor = '#1C2A3F')}
+      onMouseEnter={e => (e.currentTarget.style.borderColor = '#D4A84335')}
+      onMouseLeave={e => (e.currentTarget.style.borderColor = '#252538')}
     >
       <div className="flex items-start justify-between mb-3">
         <div
-          className="p-2 rounded-lg transition-all duration-150"
-          style={{ background: 'linear-gradient(135deg,#2563EB18,#7C3AED12)' }}
+          className="p-2 rounded-xl"
+          style={{ background: 'linear-gradient(135deg,#D4A84318,#8B7CF610)' }}
         >
-          <Film size={20} className="text-primary" />
+          <Film size={20} style={{ color: '#D4A843' }} />
         </div>
-        <span className={`text-xs px-2 py-1 rounded-full font-medium capitalize border ${sc.text} ${sc.bg} ${sc.border}`}>
+        <span
+          className="text-xs px-2 py-1 rounded-full font-medium capitalize"
+          style={{ color: sc.text, background: sc.bg, border: `1px solid ${sc.border}` }}
+        >
           {project.status}
         </span>
       </div>
 
-      <h3 className="font-medium text-slate-100 truncate mb-1" title={project.filename}>
+      <h3 className="font-medium truncate mb-1" style={{ color: '#F0EDE8' }} title={project.filename}>
         {project.filename}
       </h3>
-      <p className="text-xs text-slate-500 mb-4">{formatDate(project.upload_time)}</p>
+      <p className="text-xs mb-4" style={{ color: '#5C5A72' }}>{formatDate(project.upload_time)}</p>
 
-      <div className="flex items-center gap-4 text-xs text-slate-400">
+      <div className="flex items-center gap-4 text-xs" style={{ color: '#A8A4B8' }}>
         <span className="flex items-center gap-1">
-          <Clock size={12} className="text-slate-500" />
+          <Clock size={12} style={{ color: '#5C5A72' }} />
           {formatDuration(project.duration)}
         </span>
         <span className="flex items-center gap-1">
-          <HardDrive size={12} className="text-slate-500" />
+          <HardDrive size={12} style={{ color: '#5C5A72' }} />
           {formatFileSize(project.size)}
         </span>
       </div>

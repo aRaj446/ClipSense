@@ -9,12 +9,12 @@ interface Props {
 }
 
 export default function Card({ children, className = '', variant = 'default', animate = false, style }: Props) {
-  const base = 'border rounded-xl p-6 transition-all duration-200'
+  const base = 'border rounded-2xl p-6 transition-all duration-200'
 
   const variants = {
-    default:  'bg-surface-card border-surface-border hover:border-surface-muted/60 shadow-card',
-    glow:     'bg-surface-card border-surface-border hover:border-primary/40 hover:shadow-glow-sm shadow-card',
-    gradient: 'bg-gradient-card border-surface-border hover:border-primary/30 shadow-card',
+    default:  'bg-surface-card border-surface-border hover:border-surface-muted/70 shadow-card',
+    glow:     'bg-surface-card border-surface-border hover:border-primary/35 hover:shadow-glow-sm shadow-card',
+    gradient: 'bg-gradient-card border-surface-border hover:border-primary/25 shadow-card',
   }
 
   return (

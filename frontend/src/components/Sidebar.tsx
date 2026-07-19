@@ -27,18 +27,18 @@ export default function Sidebar({ collapsed }: Props) {
           transition-[width] duration-300 ease-[cubic-bezier(0.4,0,0.2,1)]
           will-change-[width] overflow-hidden relative"
       >
-        {/* Sidebar background with subtle gradient */}
+        {/* Background */}
         <div
           className="absolute inset-0 pointer-events-none"
           style={{
-            background: 'linear-gradient(180deg, #0E1525 0%, #080D18 100%)',
-            borderRight: '1px solid #1C2A3F',
+            background: 'linear-gradient(180deg, #13131F 0%, #0C0C14 100%)',
+            borderRight: '1px solid #252538',
           }}
         />
-        {/* Subtle top glow */}
+        {/* Subtle gold glow at top */}
         <div
-          className="absolute top-0 left-0 right-0 h-32 pointer-events-none"
-          style={{ background: 'radial-gradient(ellipse at 50% 0%, #2563EB0A 0%, transparent 70%)' }}
+          className="absolute top-0 left-0 right-0 h-28 pointer-events-none"
+          style={{ background: 'radial-gradient(ellipse at 50% 0%, #D4A84308 0%, transparent 70%)' }}
         />
 
         <nav className="flex flex-col gap-0.5 px-2 mt-2 relative">
@@ -54,39 +54,39 @@ export default function Sidebar({ collapsed }: Props) {
                     onClick={(e) => disabled && e.preventDefault()}
                     className={({ isActive }) =>
                       [
-                        'relative flex items-center gap-3 rounded-lg',
+                        'relative flex items-center gap-3 rounded-xl',
                         'px-2.5 py-2.5 text-sm font-medium select-none',
-                        'outline-none focus-visible:ring-2 focus-visible:ring-primary/60',
+                        'outline-none focus-visible:ring-2 focus-visible:ring-primary/50',
                         'transition-all duration-150',
                         collapsed ? 'justify-center' : '',
                         disabled
-                          ? 'pointer-events-none opacity-40 text-slate-500'
+                          ? 'pointer-events-none opacity-35 text-ink-faint'
                           : isActive
-                            ? 'text-white'
-                            : 'text-slate-400 hover:text-slate-100',
+                            ? 'text-ink'
+                            : 'text-ink-muted hover:text-ink',
                       ].join(' ')
                     }
                   >
                     {({ isActive }: { isActive: boolean }) => (
                       <>
-                        {/* Active background gradient */}
+                        {/* Active background */}
                         {!disabled && isActive && (
                           <span
-                            className="absolute inset-0 rounded-lg"
+                            className="absolute inset-0 rounded-xl"
                             style={{
-                              background: 'linear-gradient(135deg, #2563EB18 0%, #7C3AED12 100%)',
-                              border: '1px solid #2563EB22',
+                              background: 'linear-gradient(135deg, #D4A84318 0%, #8B7CF610 100%)',
+                              border: '1px solid #D4A84325',
                             }}
                           />
                         )}
 
                         {/* Hover background */}
                         {!disabled && !isActive && (
-                          <span className="absolute inset-0 rounded-lg opacity-0 hover:opacity-100
+                          <span className="absolute inset-0 rounded-xl opacity-0 hover:opacity-100
                             bg-surface-raised transition-opacity duration-150" />
                         )}
 
-                        {/* Active left indicator — gradient bar */}
+                        {/* Active left indicator — gold bar */}
                         {!disabled && (
                           <span
                             className="absolute left-0 top-1/2 -translate-y-1/2 w-0.5 rounded-r-full
@@ -94,32 +94,27 @@ export default function Sidebar({ collapsed }: Props) {
                             style={{
                               height: isActive ? '20px' : '0px',
                               opacity: isActive ? 1 : 0,
-                              background: 'linear-gradient(180deg, #2563EB 0%, #7C3AED 100%)',
-                              boxShadow: isActive ? '0 0 8px #2563EB80' : 'none',
+                              background: 'linear-gradient(180deg, #E8C56A 0%, #D4A843 100%)',
+                              boxShadow: isActive ? '0 0 8px #D4A84370' : 'none',
                             }}
                           />
                         )}
 
-                        {/* Icon — gradient tint when active */}
+                        {/* Icon */}
                         <span
                           className="relative shrink-0"
-                          style={isActive ? {
-                            filter: 'drop-shadow(0 0 6px #2563EB80)',
-                          } : {}}
+                          style={isActive ? { filter: 'drop-shadow(0 0 5px #D4A84360)' } : {}}
                         >
                           <Icon
                             size={18}
-                            style={isActive ? {
-                              stroke: 'url(#nav-gradient)',
-                            } : {}}
+                            style={isActive ? { stroke: 'url(#nav-gradient)' } : {}}
                           />
-                          {/* Inline SVG gradient def — rendered once per icon */}
                           {isActive && (
                             <svg width="0" height="0" className="absolute">
                               <defs>
                                 <linearGradient id="nav-gradient" x1="0%" y1="0%" x2="100%" y2="100%">
-                                  <stop offset="0%" stopColor="#3B82F6" />
-                                  <stop offset="100%" stopColor="#7C3AED" />
+                                  <stop offset="0%"   stopColor="#E8C56A" />
+                                  <stop offset="100%" stopColor="#D4A843" />
                                 </linearGradient>
                               </defs>
                             </svg>
@@ -138,7 +133,7 @@ export default function Sidebar({ collapsed }: Props) {
 
                         {/* Soon badge */}
                         {disabled && !collapsed && (
-                          <span className="ml-auto text-[10px] bg-surface-raised text-slate-500
+                          <span className="ml-auto text-[10px] bg-surface-raised text-ink-faint
                             px-1.5 py-0.5 rounded shrink-0 relative">
                             Soon
                           </span>
@@ -149,25 +144,24 @@ export default function Sidebar({ collapsed }: Props) {
                 </div>
               </Tooltip.Trigger>
 
-              {/* Tooltip — only active when collapsed */}
               <Tooltip.Portal>
                 <Tooltip.Content
                   side="right"
                   sideOffset={10}
                   hidden={!collapsed}
-                  className="z-50 px-2.5 py-1.5 rounded-lg text-xs font-medium select-none
+                  className="z-50 px-2.5 py-1.5 rounded-xl text-xs font-medium select-none
                     border shadow-glow-sm
                     data-[state=delayed-open]:animate-fade-in
                     data-[state=closed]:animate-out data-[state=closed]:fade-out-0"
                   style={{
-                    background: 'linear-gradient(135deg, #0E1525 0%, #141E30 100%)',
-                    borderColor: '#2563EB30',
-                    color: '#e2e8f0',
+                    background: 'linear-gradient(135deg, #13131F 0%, #1A1A2E 100%)',
+                    borderColor: '#D4A84328',
+                    color: '#F0EDE8',
                   }}
                 >
                   {label}
-                  {disabled && <span className="ml-1.5 text-slate-500">(Soon)</span>}
-                  <Tooltip.Arrow style={{ fill: '#0E1525' }} />
+                  {disabled && <span className="ml-1.5 text-ink-faint">(Soon)</span>}
+                  <Tooltip.Arrow style={{ fill: '#13131F' }} />
                 </Tooltip.Content>
               </Tooltip.Portal>
 
@@ -175,10 +169,10 @@ export default function Sidebar({ collapsed }: Props) {
           ))}
         </nav>
 
-        {/* Bottom gradient fade */}
+        {/* Bottom fade */}
         <div
           className="absolute bottom-0 left-0 right-0 h-16 pointer-events-none"
-          style={{ background: 'linear-gradient(0deg, #080D18 0%, transparent 100%)' }}
+          style={{ background: 'linear-gradient(0deg, #0C0C14 0%, transparent 100%)' }}
         />
       </aside>
     </Tooltip.Provider>
