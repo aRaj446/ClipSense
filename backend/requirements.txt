@@ -6,6 +6,9 @@ ffmpeg-python==0.2.0
 sqlalchemy==2.0.36
 alembic==1.13.3
 google-genai>=2.11.0
+transformers>=4.40.0
+torch>=2.2.0
+sentencepiece>=0.2.0
 openpyxl==3.1.5
 scenedetect[opencv]>=0.7
 openai-whisper>=20250625

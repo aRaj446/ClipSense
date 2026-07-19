@@ -80,7 +80,7 @@ Then run: `alembic upgrade head`
 
 | Concern | Choice | Reason |
 |---|---|---|
-| Sentiment parsing | Gemini 2.5 Pro | Multimodal — reads video + text in one API call |
+| Sentiment parsing | HuggingFace `facebook/bart-large-mnli` | Zero-shot classification — fully local, no API key |
 | Video editing execution | FFmpeg + PySceneDetect + Whisper | Libraries, not LLMs. LLMs produce EditingPlan JSON; FFmpeg executes it |
 | Local DB | SQLite | Zero config, single file, trivial to swap |
 | Prod DB | PostgreSQL / AWS RDS | One-line change in database.py |

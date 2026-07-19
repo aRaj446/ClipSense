@@ -7,7 +7,7 @@ Full-stack AI Marketing Optimization Platform. Path: `C:\Users\7000039334\Docume
 - Frontend: React 18 + Vite + TypeScript + TailwindCSS
 - Backend: FastAPI + Python + SQLAlchemy + SQLite (→ PostgreSQL/RDS later)
 - Video processing: FFmpeg + PySceneDetect + Whisper (libraries, not LLMs)
-- LLM target: Gemini 2.5 Pro (multimodal) for Agent 1 sentiment parsing
+- LLM target: HuggingFace `facebook/bart-large-mnli` (zero-shot, local) for Stage 1 sentiment/topic parsing
 
 ## AI Pipeline
 Agent 1 (FeedbackStructuringAgent) → DB SAVE → Agent 2 (VideoOptimizationAgent) → Agent 3 (VideoRegenerationAgent, placeholder)

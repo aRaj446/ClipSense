@@ -1,121 +1,119 @@
 """
-Feedback Structuring Agent — Module 1
+Feedback Structuring Agent — Stage 1
 
-Primary:  Gemini 2.5 Pro (multimodal LLM) — reads raw unstructured text and
-          returns structured FeedbackSegment JSON in a single API call.
-Fallback: Regex + keyword heuristics — used when GEMINI_API_KEY is not set
-          or the Gemini call fails.
+Primary:  HuggingFace zero-shot classification (facebook/bart-large-mnli)
+          Runs fully local — no API key, no external calls.
+          Model is lazy-loaded on first use and cached for the process lifetime.
 
-To activate Gemini: set GEMINI_API_KEY in backend/.env
+Fallback: Regex + keyword heuristics — used if the model fails to load
+          or inference raises an exception.
+
+Pipeline contract (unchanged):
+    FeedbackStructuringAgent.parse(raw_text: str) -> list[FeedbackSegment]
 """
 
-import os
 import re
-import json
 import logging
 from app.schemas.feedback import FeedbackSegment
 
 logger = logging.getLogger(__name__)
 
-# ── Gemini setup ──────────────────────────────────────────────────────────────
+# ── Valid label sets ──────────────────────────────────────────────────────────
 
-_GEMINI_MODEL = "models/gemini-3.1-flash-lite"
+VALID_TOPICS = [
+    "Camera", "Music", "Narration", "Transitions", "Intro", "Ending",
+    "Product Demo", "Subtitles", "Pacing", "Engagement", "Animation",
+    "Feature Explanation", "Pricing", "General",
+]
 
+VALID_SENTIMENTS = [
+    "Positive", "Negative", "Neutral", "Suggestion", "Complaint", "Praise", "Question",
+]
 
-def _get_gemini_key() -> str:
-    return os.getenv("GEMINI_FREE_API_KEY") or os.getenv("GEMINI_API_KEY", "")
+# ── HuggingFace model (lazy singleton) ───────────────────────────────────────
 
-_GEMINI_PROMPT = """You are the Feedback Structuring Agent of an AI-powered Video Marketing Optimization Platform.
-Your ONLY job is to convert raw unstructured audience feedback into a normalized structured JSON dataset.
-Do NOT perform analytics, aggregation, recommendations, or optimization.
-
-DATA CLEANING:
-- Remove duplicate comments, URLs, emojis, usernames (@), hashtags (#), spam.
-- Ignore meaningless comments ("First", "W", "LOL", standalone emoji) unless they express a clear opinion.
-- Normalize punctuation and trim whitespace.
-- Feedback may be multilingual — always output English summaries.
-
-TIMESTAMP EXTRACTION:
-- Detect formats: 0:34 / 00:34 / 1m20s / 45sec. Normalize to MM:SS. Return null if absent. Never invent timestamps.
-
-TOPIC — choose EXACTLY ONE from: Camera, Music, Narration, Transitions, Intro, Ending, Product Demo, Subtitles, Pacing, Engagement, Animation, Feature Explanation, Pricing, General
-
-SENTIMENT — choose EXACTLY ONE from: Positive, Negative, Neutral, Suggestion, Complaint, Praise, Question
-
-SUMMARY — one clean English sentence, max 120 characters, no slang, no emojis, no copied text.
-
-CONFIDENCE — float 0.40–1.00
-
-OUTPUT: Return ONLY a valid JSON array. No markdown. No explanation. No code fences.
-Each object must have exactly: {{"timestamp": "MM:SS or null", "topic": "...", "sentiment": "...", "summary": "...", "confidence": 0.00}}
-
-RAW FEEDBACK:
-{feedback}
-"""
+_classifier = None
+_MODEL_NAME = "facebook/bart-large-mnli"
 
 
-def _extract_json(text: str) -> str:
-    """Extract the first complete JSON array or object from a string."""
-    text = text.strip()
-    if text.startswith("```"):
-        text = re.sub(r"^```[a-zA-Z]*\n?", "", text)
-        text = re.sub(r"\n?```$", "", text.strip())
-        text = text.strip()
-    # Find outermost [ ] or { }
-    for start_char, end_char in (('[', ']'), ('{', '}')):
-        start = text.find(start_char)
-        end = text.rfind(end_char)
-        if start != -1 and end != -1 and end > start:
-            return text[start:end + 1]
-    return text
-
-
-def _call_gemini(raw_feedback: str) -> list[FeedbackSegment] | None:
-    """Call Gemini 2.5 Pro and parse the response into FeedbackSegment list."""
-    import sys
-    print("Entering Feedback Structuring Agent", flush=True, file=sys.stderr)
+def _get_classifier():
+    """Lazy-load the zero-shot classifier. Returns None if unavailable."""
+    global _classifier
+    if _classifier is not None:
+        return _classifier
     try:
-        import google.genai as genai
-        client = genai.Client(api_key=_get_gemini_key())
-        prompt = _GEMINI_PROMPT.replace("{feedback}", raw_feedback)
-        print("About to call Gemini", flush=True, file=sys.stderr)
-        print("Model:", _GEMINI_MODEL, flush=True, file=sys.stderr)
-        print("Key prefix:", _get_gemini_key()[:8], flush=True, file=sys.stderr)
-        response = client.models.generate_content(
-            model=_GEMINI_MODEL,
-            contents=prompt,
+        from transformers import pipeline
+        logger.info("FeedbackStructuringAgent: loading %s …", _MODEL_NAME)
+        _classifier = pipeline(
+            "zero-shot-classification",
+            model=_MODEL_NAME,
+            device=-1,          # CPU — set to 0 for GPU if available
+            multi_label=False,
         )
-        text = response.text.strip()
-        text = _extract_json(text)
-
-        # Repair truncated JSON array — drop the last incomplete object
-        if not text.endswith("]"):
-            last_complete = text.rfind("},")
-            if last_complete != -1:
-                text = text[: last_complete + 1] + "]"
-            else:
-                text = text + "]"  # best-effort
-
-        data = json.loads(text)
-        if not isinstance(data, list):
-            raise ValueError("Gemini response is not a JSON array")
-
-        segments = []
-        for item in data:
-            if not isinstance(item, dict):
-                continue
-            segments.append(FeedbackSegment(
-                timestamp=item.get("timestamp") or None,
-                topic=item.get("topic") or "General",
-                sentiment=item.get("sentiment") or "Neutral",
-                summary=str(item.get("summary", ""))[:120],
-                confidence=float(item.get("confidence") or 0.75),
-            ))
-        return segments if segments else None
-
+        logger.info("FeedbackStructuringAgent: model loaded successfully")
+        return _classifier
     except Exception as exc:
-        logger.warning("Gemini call failed, falling back to regex parser: %s", exc)
+        logger.warning("FeedbackStructuringAgent: could not load HuggingFace model (%s) — regex fallback active", exc)
         return None
+
+
+def _classify_line(clf, text: str) -> tuple[str, str, float]:
+    """
+    Run zero-shot classification for both topic and sentiment in two passes.
+    Returns (topic, sentiment, confidence).
+    Confidence is the geometric mean of both classification scores.
+    """
+    topic_result     = clf(text, VALID_TOPICS,     hypothesis_template="This feedback is about {}.")
+    sentiment_result = clf(text, VALID_SENTIMENTS, hypothesis_template="The sentiment of this feedback is {}.")
+
+    topic     = topic_result["labels"][0]
+    sentiment = sentiment_result["labels"][0]
+
+    # Geometric mean of top scores — reflects joint confidence
+    topic_score     = float(topic_result["scores"][0])
+    sentiment_score = float(sentiment_result["scores"][0])
+    confidence      = round((topic_score * sentiment_score) ** 0.5, 3)
+    confidence      = max(0.40, min(1.00, confidence))
+
+    return topic, sentiment, confidence
+
+
+# ── HuggingFace primary path ──────────────────────────────────────────────────
+
+def _hf_parse(raw_feedback: str) -> list[FeedbackSegment] | None:
+    """Parse feedback using HuggingFace zero-shot classification."""
+    clf = _get_classifier()
+    if clf is None:
+        return None
+
+    raw_lines = re.split(r"[\n]+", raw_feedback)
+    segments: list[FeedbackSegment] = []
+    seen: set[str] = set()
+
+    for raw_line in raw_lines:
+        line = _clean_line(raw_line)
+        if len(line) < 8:
+            continue
+        key = line.lower()
+        if key in seen or key.strip("! ") in _SPAM_EXACT:
+            continue
+        seen.add(key)
+
+        try:
+            topic, sentiment, confidence = _classify_line(clf, line)
+        except Exception as exc:
+            logger.warning("FeedbackStructuringAgent: HF inference failed on line, skipping: %s", exc)
+            continue
+
+        segments.append(FeedbackSegment(
+            timestamp=_extract_timestamp(line),
+            topic=topic,
+            sentiment=sentiment,
+            summary=line[:120],
+            confidence=confidence,
+        ))
+
+    return segments if segments else None
 
 
 # ── Regex fallback ────────────────────────────────────────────────────────────
@@ -137,26 +135,24 @@ _TOPIC_KEYWORDS: dict[str, list[str]] = {
 }
 
 _POSITIVE_WORDS = {
-    "amazing","incredible","loved","great","excellent","awesome","fantastic",
-    "beautiful","perfect","best","brilliant","outstanding","superb","wonderful",
-    "nice","good","enjoy","enjoyed","impressive","love","like","liked",
-    "goosebumps","iconic","cooked","insane","gorgeous","unbelievable",
-    "highlight","favorite","favourite","never misses","never disappoints",
-    "deserves","hype","fits perfectly","steals every scene","stole","wow",
-    "day one","take my money","can't wait","goty","replayed","magnifique",
-    "increíble","unglaublich","already iconic","crazy","fire",
+    "amazing", "incredible", "loved", "great", "excellent", "awesome", "fantastic",
+    "beautiful", "perfect", "best", "brilliant", "outstanding", "superb", "wonderful",
+    "nice", "good", "enjoy", "enjoyed", "impressive", "love", "like", "liked",
+    "goosebumps", "iconic", "insane", "gorgeous", "unbelievable",
+    "highlight", "favorite", "favourite", "never misses", "never disappoints",
+    "deserves", "hype", "fits perfectly", "wow", "fire",
 }
 _NEGATIVE_WORDS = {
-    "too long","too loud","skip","boring","bad","terrible","awful","poor",
-    "stopped watching","dropped","lost interest","awkward","confusing",
-    "unclear","disappointed","hate","hated","dislike","disliked",
-    "not impressed","difficult to hear","too slow","too many",
-    "stayed too long","show gameplay","pacing","worse","worst",
+    "too long", "too loud", "skip", "boring", "bad", "terrible", "awful", "poor",
+    "stopped watching", "dropped", "lost interest", "awkward", "confusing",
+    "unclear", "disappointed", "hate", "hated", "dislike", "disliked",
+    "not impressed", "difficult to hear", "too slow", "too many",
+    "stayed too long", "pacing", "worse", "worst",
 }
 _SUGGESTION_WORDS = {
-    "wish","should","could","would","suggest","recommend","consider",
-    "maybe","perhaps","improve","add","include","need more","move the",
-    "add subtitles","more gameplay","explain","can someone",
+    "wish", "should", "could", "would", "suggest", "recommend", "consider",
+    "maybe", "perhaps", "improve", "add", "include", "need more", "move the",
+    "add subtitles", "more gameplay", "explain", "can someone",
 }
 
 _TIMESTAMP_PATTERNS = [
@@ -165,6 +161,21 @@ _TIMESTAMP_PATTERNS = [
     re.compile(r'\b(\d+)\s*(?:min(?:ute)?s?)\b'),
     re.compile(r'\b(\d+)\s*(?:sec(?:ond)?s?)\b'),
 ]
+
+_SPAM_EXACT = {"first", "first!!", "w", "lol", "lmao", "nice", "fire", "🔥", "😂"}
+
+_CLEAN_PATTERNS = [
+    re.compile(r'https?://\S+'),
+    re.compile(r'#\w+'),
+    re.compile(r'@\w+'),
+    re.compile(r'[^\x00-\x7F\u0900-\u097F\u3040-\u30FF\u4E00-\u9FFF\s]+'),
+]
+
+
+def _clean_line(text: str) -> str:
+    for pat in _CLEAN_PATTERNS:
+        text = pat.sub(' ', text)
+    return re.sub(r'\s+', ' ', text).strip()
 
 
 def _extract_timestamp(text: str) -> str | None:
@@ -199,40 +210,17 @@ def _detect_sentiment(text: str) -> tuple[str, float]:
     return "Neutral", 0.60
 
 
-_CLEAN_PATTERNS = [
-    re.compile(r'https?://\S+'),           # URLs
-    re.compile(r'#\w+'),                   # hashtags
-    re.compile(r'@\w+'),                   # usernames
-    re.compile(r'[^\x00-\x7F\u0900-\u097F\u3040-\u30FF\u4E00-\u9FFF\s]+'),  # emojis / symbols
-]
-
-_SPAM_EXACT = {"first", "first!!", "w", "lol", "lmao", "nice", "fire", "🔥", "😂"}
-
-
-def _clean_line(text: str) -> str:
-    for pat in _CLEAN_PATTERNS:
-        text = pat.sub(' ', text)
-    return re.sub(r'\s+', ' ', text).strip()
-
-
 def _regex_parse(raw_feedback: str) -> list[FeedbackSegment]:
-    # Split only on newlines — never on sentence-ending punctuation
-    # (timestamps and their comments live on the same line)
     raw_lines = re.split(r'[\n]+', raw_feedback)
-
-    segments = []
+    segments: list[FeedbackSegment] = []
     seen: set[str] = set()
 
     for raw_line in raw_lines:
         line = _clean_line(raw_line)
         if len(line) < 8:
             continue
-        # Deduplicate
         key = line.lower()
-        if key in seen:
-            continue
-        # Skip pure spam
-        if key.strip('! ') in _SPAM_EXACT:
+        if key in seen or key.strip('! ') in _SPAM_EXACT:
             continue
         seen.add(key)
 
@@ -251,18 +239,22 @@ def _regex_parse(raw_feedback: str) -> list[FeedbackSegment]:
 
 class FeedbackStructuringAgent:
     """
-    Module 1 — Feedback Structuring Agent.
+    Stage 1 — Feedback Structuring Agent.
 
-    Uses Gemini 2.5 Pro when GEMINI_API_KEY is set.
-    Falls back to regex heuristics otherwise.
+    Parses raw unstructured audience feedback into structured FeedbackSegment list.
+
+    Primary:  HuggingFace zero-shot classification (facebook/bart-large-mnli).
+              Runs fully local — no API key required.
+    Fallback: Regex + keyword heuristics if the model is unavailable.
     """
 
     def parse(self, raw_feedback: str) -> list[FeedbackSegment]:
-        if _get_gemini_key() and _get_gemini_key() != "your_gemini_api_key_here":
-            result = _call_gemini(raw_feedback)
-            if result is not None:
-                logger.info("Gemini parsed %d segments", len(result))
-                return result
-            logger.warning("Gemini failed — using regex fallback")
+        result = _hf_parse(raw_feedback)
+        if result is not None:
+            logger.info("FeedbackStructuringAgent: HuggingFace parsed %d segments", len(result))
+            return result
 
-        return _regex_parse(raw_feedback)
+        logger.warning("FeedbackStructuringAgent: HuggingFace unavailable — using regex fallback")
+        segments = _regex_parse(raw_feedback)
+        logger.info("FeedbackStructuringAgent: regex fallback parsed %d segments", len(segments))
+        return segments

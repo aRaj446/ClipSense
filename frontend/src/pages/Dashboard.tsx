@@ -8,6 +8,7 @@ import { useProjectFetch } from '../hooks/useProjectFetch'
 import VideoCard from '../components/VideoCard'
 import Button from '../components/Button'
 import Card from '../components/Card'
+
 import LoadingSpinner from '../components/LoadingSpinner'
 import { Project } from '../types/project'
 import { TrailerJob, SmartTrailerJob } from '../types/analysis'
@@ -188,37 +189,6 @@ export default function Dashboard() {
 
   return (
     <div className="max-w-7xl mx-auto space-y-8">
-
-      {/* ── Hero header ──────────────────────────────────────────────────── */}
-      <div
-        className="rounded-2xl p-6 flex items-center justify-between gap-4 animate-fade-in"
-        style={{
-          background: 'linear-gradient(135deg, #13131F 0%, #1A1A2E 60%, #13131F 100%)',
-          border: '1px solid #252538',
-          boxShadow: '0 0 60px 0 #D4A84308',
-        }}
-      >
-        <div>
-          <div className="flex items-center gap-2 mb-1">
-            <Sparkles size={13} style={{ color: '#D4A843' }} />
-            <span className="text-xs font-medium tracking-widest uppercase" style={{ color: '#5C5A72' }}>
-              AI Marketing Platform
-            </span>
-          </div>
-          <h1
-            className="text-3xl font-bold bg-clip-text text-transparent"
-            style={{ backgroundImage: 'linear-gradient(135deg, #F0EDE8 0%, #A8A4B8 100%)' }}
-          >
-            Dashboard
-          </h1>
-          <p className="text-sm mt-1" style={{ color: '#A8A4B8' }}>
-            Analyse audience feedback and generate optimised trailers.
-          </p>
-        </div>
-        <Button icon={<Upload size={16} />} onClick={() => navigate('/upload')} className="shrink-0">
-          Upload Video
-        </Button>
-      </div>
 
       {/* ── Stats ────────────────────────────────────────────────────────── */}
       <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
