@@ -102,6 +102,7 @@ class TopicBreakdown(BaseModel):
     neutral: int
     avg_confidence: float
     dominant_sentiment: str
+    engagement_score: float   # (positive - negative) / total, range [-1.0, 1.0]
 
 
 class TimelinePoint(BaseModel):
@@ -118,6 +119,15 @@ class ConfidenceStats(BaseModel):
     max: float
     high_confidence_count: int
     low_confidence_count: int
+    unanchored_count: int     # segments with no timestamp
+
+
+class SentimentVelocityBucket(BaseModel):
+    minute: int               # video minute (0 = 0:00–0:59, 1 = 1:00–1:59, …)
+    positive: int
+    negative: int
+    neutral: int
+    net: int                  # positive - negative
 
 
 class TopicInsight(BaseModel):
@@ -125,7 +135,7 @@ class TopicInsight(BaseModel):
     sentiment: str
     count: int
     avg_confidence: float
-    sample_summary: str
+    sample_summaries: list[str]   # up to 3 representative summaries
 
 
 class AnalyticsReport(BaseModel):
@@ -134,6 +144,7 @@ class AnalyticsReport(BaseModel):
     topic_breakdown: list[TopicBreakdown]
     timeline: list[TimelinePoint]
     confidence_stats: ConfidenceStats
+    sentiment_velocity: list[SentimentVelocityBucket]
     top_issues: list[TopicInsight]
     top_positives: list[TopicInsight]
     total_segments: int

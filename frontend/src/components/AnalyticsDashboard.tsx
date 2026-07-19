@@ -3,8 +3,9 @@ import {
   PieChart, Pie, Cell, Tooltip, ResponsiveContainer,
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Legend,
   ScatterChart, Scatter, ZAxis,
+  LineChart, Line, ReferenceLine,
 } from 'recharts'
-import { BarChart2, Loader2, AlertCircle, TrendingUp, TrendingDown, Activity } from 'lucide-react'
+import { BarChart2, Loader2, AlertCircle, TrendingUp, TrendingDown, Activity, Clock } from 'lucide-react'
 import { AnalyticsReport } from '../types/analysis'
 import { feedbackService } from '../services/feedbackService'
 import Card from './Card'
@@ -16,22 +17,22 @@ interface Props {
 }
 
 const SENTIMENT_COLORS: Record<string, string> = {
-  Positive:   '#22c55e',
-  Praise:     '#4ade80',
-  Negative:   '#ef4444',
-  Complaint:  '#f87171',
-  Neutral:    '#94a3b8',
-  Suggestion: '#f59e0b',
-  Question:   '#60a5fa',
+  Positive:   '#4ADE80',
+  Praise:     '#86EFAC',
+  Negative:   '#F87171',
+  Complaint:  '#FCA5A5',
+  Neutral:    '#A8A4B8',
+  Suggestion: '#FCD34D',
+  Question:   '#93C5FD',
 }
 
-const CHART_COLORS = ['#6366f1', '#22c55e', '#f59e0b', '#ef4444', '#60a5fa', '#a78bfa', '#34d399']
+const CHART_COLORS = ['#D4A843', '#8B7CF6', '#2DD4BF', '#F472B6', '#60A5FA', '#A78BFA', '#34D399']
 
 const TOOLTIP_STYLE = {
-  backgroundColor: '#0E1525',
-  border: '1px solid #1C2A3F',
+  backgroundColor: '#13131F',
+  border: '1px solid #252538',
   borderRadius: '10px',
-  color: '#e2e8f0',
+  color: '#F0EDE8',
   fontSize: '12px',
   boxShadow: '0 8px 32px 0 #00000060',
 }
@@ -41,17 +42,32 @@ function SectionTitle({ icon, title }: { icon: React.ReactNode; title: string })
     <div className="flex items-center gap-2 mb-4">
       <span
         className="w-0.5 h-4 rounded-full shrink-0"
-        style={{ background: 'linear-gradient(180deg,#2563EB,#7C3AED)' }}
+        style={{ background: 'linear-gradient(180deg, #D4A843, #8B7CF6)' }}
       />
-      <span className="text-primary">{icon}</span>
-      <h3 className="font-semibold text-slate-100 text-sm">{title}</h3>
+      <span style={{ color: '#D4A843' }}>{icon}</span>
+      <h3 className="font-semibold text-sm" style={{ color: '#F0EDE8' }}>{title}</h3>
     </div>
   )
 }
 
-// Truncate long labels to fit axis ticks
 function truncate(str: string, max = 14) {
   return str.length > max ? str.slice(0, max) + '…' : str
+}
+
+// Engagement score bar: -1.0 (all negative) → +1.0 (all positive)
+function EngagementBar({ score }: { score: number }) {
+  const pct = Math.round(((score + 1) / 2) * 100)
+  const color = score >= 0.2 ? '#4ADE80' : score >= -0.2 ? '#FCD34D' : '#F87171'
+  return (
+    <div className="flex items-center gap-2 mt-1">
+      <div className="flex-1 h-1 rounded-full" style={{ background: '#252538' }}>
+        <div className="h-1 rounded-full transition-all" style={{ width: `${pct}%`, background: color }} />
+      </div>
+      <span className="text-xs shrink-0 font-medium" style={{ color }}>
+        {score >= 0 ? '+' : ''}{score.toFixed(2)}
+      </span>
+    </div>
+  )
 }
 
 export default function AnalyticsDashboard({ datasetId, datasetName, prefetchedReport }: Props) {
@@ -60,12 +76,7 @@ export default function AnalyticsDashboard({ datasetId, datasetName, prefetchedR
   const [error, setError]     = useState<string | null>(null)
 
   useEffect(() => {
-    // If a prefetched report was passed in, use it directly — no fetch needed
-    if (prefetchedReport) {
-      setReport(prefetchedReport)
-      setLoading(false)
-      return
-    }
+    if (prefetchedReport) { setReport(prefetchedReport); setLoading(false); return }
     setLoading(true)
     setError(null)
     feedbackService.getAnalytics(datasetId)
@@ -77,8 +88,8 @@ export default function AnalyticsDashboard({ datasetId, datasetName, prefetchedR
   if (loading) {
     return (
       <Card className="flex items-center justify-center py-16 gap-3">
-        <Loader2 size={20} className="text-primary animate-spin" />
-        <span className="text-slate-400 text-sm">Generating analytics…</span>
+        <Loader2 size={20} className="animate-spin" style={{ color: '#D4A843' }} />
+        <span className="text-sm" style={{ color: '#A8A4B8' }}>Generating analytics…</span>
       </Card>
     )
   }
@@ -86,24 +97,25 @@ export default function AnalyticsDashboard({ datasetId, datasetName, prefetchedR
   if (error || !report) {
     return (
       <Card className="flex items-center justify-center py-12 gap-3">
-        <AlertCircle size={18} className="text-red-400" />
-        <span className="text-slate-400 text-sm">{error ?? 'No data'}</span>
+        <AlertCircle size={18} style={{ color: '#F87171' }} />
+        <span className="text-sm" style={{ color: '#A8A4B8' }}>{error ?? 'No data'}</span>
       </Card>
     )
   }
 
-  // ── Prepare chart data ──────────────────────────────────────────────────
+  // ── Prepare chart data ────────────────────────────────────────────────────
 
   const sentimentPieData = Object.entries(report.sentiment_distribution)
     .filter(([, v]) => v > 0)
     .map(([name, value]) => ({ name, value }))
 
+  // Topic bar sorted by engagement_score (already sorted from backend)
   const topicBarData = report.topic_breakdown.slice(0, 8).map(t => ({
-    topic: truncate(t.topic),
+    topic:    truncate(t.topic),
     Positive: t.positive,
     Negative: t.negative,
     Neutral:  t.neutral,
-    total:    t.total,
+    score:    t.engagement_score,
   }))
 
   const issueVsPositiveData = [
@@ -112,9 +124,9 @@ export default function AnalyticsDashboard({ datasetId, datasetName, prefetchedR
   ]
 
   const confidenceBarData = [
-    { label: 'High ≥80%', count: report.confidence_stats.high_confidence_count, fill: '#22c55e' },
-    { label: 'Medium',    count: report.total_segments - report.confidence_stats.high_confidence_count - report.confidence_stats.low_confidence_count, fill: '#f59e0b' },
-    { label: 'Low <60%',  count: report.confidence_stats.low_confidence_count, fill: '#ef4444' },
+    { label: 'High ≥80%', count: report.confidence_stats.high_confidence_count, fill: '#4ADE80' },
+    { label: 'Medium',    count: report.total_segments - report.confidence_stats.high_confidence_count - report.confidence_stats.low_confidence_count, fill: '#FCD34D' },
+    { label: 'Low <60%',  count: report.confidence_stats.low_confidence_count, fill: '#F87171' },
   ]
 
   const timelineScatterData = report.timeline
@@ -124,41 +136,62 @@ export default function AnalyticsDashboard({ datasetId, datasetName, prefetchedR
       const x = parts.length === 3
         ? parts[0] * 3600 + parts[1] * 60 + parts[2]
         : parts[0] * 60 + (parts[1] ?? 0)
-      return { x, y: Math.round(t.confidence * 100), sentiment: t.sentiment, topic: t.topic }
+      return { x, y: Math.round(t.confidence * 100), sentiment: t.sentiment, topic: t.topic, summary: t.summary }
     })
+
+  const velocityData = report.sentiment_velocity.map(b => ({
+    minute: `${b.minute}:00`,
+    Positive: b.positive,
+    Negative: b.negative,
+    Net: b.net,
+  }))
 
   return (
     <div className="space-y-5">
 
-      <div className="flex items-center gap-2">
-        <BarChart2 size={16} className="text-primary" />
-        <h2 className="font-semibold text-slate-100">
+      {/* ── Header ─────────────────────────────────────────────────────────── */}
+      <div className="flex items-center gap-2 flex-wrap">
+        <BarChart2 size={16} style={{ color: '#D4A843' }} />
+        <h2 className="font-semibold" style={{ color: '#F0EDE8' }}>
           Analytics Dashboard
-          {datasetName && <span className="ml-2 text-slate-500 font-normal text-sm">— {datasetName}</span>}
+          {datasetName && <span className="ml-2 font-normal text-sm" style={{ color: '#5C5A72' }}>— {datasetName}</span>}
         </h2>
-        <span className="ml-auto text-xs text-slate-500">{report.total_segments} segments · {new Date(report.analyzed_at).toLocaleString()}</span>
+        <div className="ml-auto flex items-center gap-3 flex-wrap">
+          {report.confidence_stats.unanchored_count > 0 && (
+            <span
+              className="flex items-center gap-1 text-xs px-2 py-0.5 rounded-full border"
+              style={{ color: '#FCD34D', background: '#FCD34D12', borderColor: '#FCD34D28' }}
+            >
+              <Clock size={10} />
+              {report.confidence_stats.unanchored_count} without timestamp
+            </span>
+          )}
+          <span className="text-xs" style={{ color: '#5C5A72' }}>
+            {report.total_segments} segments · {new Date(report.analyzed_at).toLocaleString()}
+          </span>
+        </div>
       </div>
 
-      {/* ── Stat pills ──────────────────────────────────────────────────── */}
+      {/* ── Stat pills ─────────────────────────────────────────────────────── */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
         {[
-          { label: 'Total Segments',  value: report.total_segments,                                color: '#3B82F6', bg: 'linear-gradient(135deg,#2563EB18,#2563EB08)' },
-          { label: 'Avg Confidence',  value: `${Math.round(report.confidence_stats.mean * 100)}%`, color: '#F59E0B', bg: 'linear-gradient(135deg,#F59E0B18,#F59E0B08)' },
-          { label: 'High Confidence', value: report.confidence_stats.high_confidence_count,        color: '#10B981', bg: 'linear-gradient(135deg,#10B98118,#10B98108)' },
-          { label: 'Topics Covered',  value: report.topic_breakdown.length,                        color: '#7C3AED', bg: 'linear-gradient(135deg,#7C3AED18,#7C3AED08)' },
+          { label: 'Total Segments',  value: report.total_segments,                                color: '#D4A843', bg: 'linear-gradient(135deg,#D4A84320,#D4A84308)' },
+          { label: 'Avg Confidence',  value: `${Math.round(report.confidence_stats.mean * 100)}%`, color: '#8B7CF6', bg: 'linear-gradient(135deg,#8B7CF620,#8B7CF608)' },
+          { label: 'High Confidence', value: report.confidence_stats.high_confidence_count,        color: '#4ADE80', bg: 'linear-gradient(135deg,#4ADE8020,#4ADE8008)' },
+          { label: 'Topics Covered',  value: report.topic_breakdown.length,                        color: '#2DD4BF', bg: 'linear-gradient(135deg,#2DD4BF20,#2DD4BF08)' },
         ].map(s => (
           <div
             key={s.label}
-            className="rounded-xl p-4 text-center border"
-            style={{ background: s.bg, borderColor: `${s.color}20` }}
+            className="rounded-2xl p-4 text-center border"
+            style={{ background: s.bg, borderColor: `${s.color}22` }}
           >
             <p className="text-2xl font-bold" style={{ color: s.color }}>{s.value}</p>
-            <p className="text-xs text-slate-500 mt-0.5">{s.label}</p>
+            <p className="text-xs mt-0.5" style={{ color: '#5C5A72' }}>{s.label}</p>
           </div>
         ))}
       </div>
 
-      {/* ── Row 1: Sentiment Pie + Topic Bar ───────────────────────────── */}
+      {/* ── Row 1: Sentiment Pie + Topic Bar ───────────────────────────────── */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
 
         <Card>
@@ -180,10 +213,9 @@ export default function AnalyticsDashboard({ datasetId, datasetName, prefetchedR
               <Tooltip contentStyle={TOOLTIP_STYLE} formatter={(v) => [v, 'Count']} />
             </PieChart>
           </ResponsiveContainer>
-          {/* Legend below chart — never overlaps */}
           <div className="flex flex-wrap gap-x-3 gap-y-1.5 mt-3 justify-center">
             {sentimentPieData.map((entry, i) => (
-              <span key={entry.name} className="flex items-center gap-1 text-xs text-slate-400">
+              <span key={entry.name} className="flex items-center gap-1 text-xs" style={{ color: '#A8A4B8' }}>
                 <span className="w-2 h-2 rounded-full inline-block shrink-0" style={{ background: SENTIMENT_COLORS[entry.name] ?? CHART_COLORS[i % CHART_COLORS.length] }} />
                 {entry.name} ({entry.value})
               </span>
@@ -192,34 +224,53 @@ export default function AnalyticsDashboard({ datasetId, datasetName, prefetchedR
         </Card>
 
         <Card>
-          <SectionTitle icon={<BarChart2 size={14} />} title="Sentiment by Topic" />
-          {/* Extra bottom margin so rotated labels don't clip */}
+          <SectionTitle icon={<BarChart2 size={14} />} title="Sentiment by Topic (sorted by engagement)" />
           <ResponsiveContainer width="100%" height={280}>
             <BarChart data={topicBarData} margin={{ top: 4, right: 8, left: -18, bottom: 56 }}>
-              <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
+              <CartesianGrid strokeDasharray="3 3" stroke="#252538" />
               <XAxis
                 dataKey="topic"
-                tick={{ fill: '#94a3b8', fontSize: 10 }}
+                tick={{ fill: '#A8A4B8', fontSize: 10 }}
                 angle={-40}
                 textAnchor="end"
                 interval={0}
                 tickFormatter={(v) => truncate(v, 12)}
               />
-              <YAxis tick={{ fill: '#94a3b8', fontSize: 10 }} width={28} />
+              <YAxis tick={{ fill: '#A8A4B8', fontSize: 10 }} width={28} />
               <Tooltip contentStyle={TOOLTIP_STYLE} />
-              <Legend
-                verticalAlign="top"
-                wrapperStyle={{ fontSize: '11px', color: '#94a3b8', paddingBottom: '4px' }}
-              />
-              <Bar dataKey="Positive" stackId="a" fill="#22c55e" />
-              <Bar dataKey="Neutral"  stackId="a" fill="#94a3b8" />
-              <Bar dataKey="Negative" stackId="a" fill="#ef4444" radius={[3, 3, 0, 0]} />
+              <Legend verticalAlign="top" wrapperStyle={{ fontSize: '11px', color: '#A8A4B8', paddingBottom: '4px' }} />
+              <Bar dataKey="Positive" stackId="a" fill="#4ADE80" />
+              <Bar dataKey="Neutral"  stackId="a" fill="#A8A4B8" />
+              <Bar dataKey="Negative" stackId="a" fill="#F87171" radius={[3, 3, 0, 0]} />
             </BarChart>
           </ResponsiveContainer>
         </Card>
       </div>
 
-      {/* ── Row 2: Top Issues vs Positives + Confidence ────────────────── */}
+      {/* ── Row 2: Sentiment Velocity ───────────────────────────────────────── */}
+      {velocityData.length > 0 && (
+        <Card>
+          <SectionTitle icon={<Activity size={14} />} title="Sentiment Velocity — reactions per minute" />
+          <ResponsiveContainer width="100%" height={220}>
+            <LineChart data={velocityData} margin={{ top: 8, right: 16, left: -18, bottom: 4 }}>
+              <CartesianGrid strokeDasharray="3 3" stroke="#252538" />
+              <XAxis dataKey="minute" tick={{ fill: '#A8A4B8', fontSize: 10 }} />
+              <YAxis tick={{ fill: '#A8A4B8', fontSize: 10 }} width={28} />
+              <Tooltip contentStyle={TOOLTIP_STYLE} />
+              <Legend verticalAlign="top" wrapperStyle={{ fontSize: '11px', color: '#A8A4B8', paddingBottom: '4px' }} />
+              <ReferenceLine y={0} stroke="#363654" />
+              <Line type="monotone" dataKey="Positive" stroke="#4ADE80" strokeWidth={2} dot={false} />
+              <Line type="monotone" dataKey="Negative" stroke="#F87171" strokeWidth={2} dot={false} />
+              <Line type="monotone" dataKey="Net"      stroke="#D4A843" strokeWidth={2} dot={false} strokeDasharray="4 2" />
+            </LineChart>
+          </ResponsiveContainer>
+          <p className="text-xs mt-1 text-center" style={{ color: '#5C5A72' }}>
+            Net (gold dashed) = positive − negative per minute. Peaks show where audience engagement was highest.
+          </p>
+        </Card>
+      )}
+
+      {/* ── Row 3: Top Issues vs Positives + Confidence ────────────────────── */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
 
         <Card>
@@ -230,26 +281,26 @@ export default function AnalyticsDashboard({ datasetId, datasetName, prefetchedR
               layout="vertical"
               margin={{ top: 4, right: 16, left: 0, bottom: 4 }}
             >
-              <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" horizontal={false} />
-              <XAxis type="number" tick={{ fill: '#94a3b8', fontSize: 10 }} width={30} />
+              <CartesianGrid strokeDasharray="3 3" stroke="#252538" horizontal={false} />
+              <XAxis type="number" tick={{ fill: '#A8A4B8', fontSize: 10 }} width={30} />
               <YAxis
                 type="category"
                 dataKey="topic"
-                tick={{ fill: '#94a3b8', fontSize: 10 }}
+                tick={{ fill: '#A8A4B8', fontSize: 10 }}
                 width={100}
                 tickFormatter={(v) => truncate(v, 16)}
               />
               <Tooltip contentStyle={TOOLTIP_STYLE} />
               <Bar dataKey="count" radius={[0, 4, 4, 0]}>
                 {issueVsPositiveData.map((entry, i) => (
-                  <Cell key={i} fill={entry.type === 'Positive' ? '#22c55e' : '#ef4444'} />
+                  <Cell key={i} fill={entry.type === 'Positive' ? '#4ADE80' : '#F87171'} />
                 ))}
               </Bar>
             </BarChart>
           </ResponsiveContainer>
           <div className="flex gap-4 mt-2 justify-center">
-            <span className="flex items-center gap-1 text-xs text-slate-400"><span className="w-2 h-2 rounded-full bg-green-500 inline-block" />Positives</span>
-            <span className="flex items-center gap-1 text-xs text-slate-400"><span className="w-2 h-2 rounded-full bg-red-500 inline-block" />Issues</span>
+            <span className="flex items-center gap-1 text-xs" style={{ color: '#A8A4B8' }}><span className="w-2 h-2 rounded-full inline-block" style={{ background: '#4ADE80' }} />Positives</span>
+            <span className="flex items-center gap-1 text-xs" style={{ color: '#A8A4B8' }}><span className="w-2 h-2 rounded-full inline-block" style={{ background: '#F87171' }} />Issues</span>
           </div>
         </Card>
 
@@ -257,9 +308,9 @@ export default function AnalyticsDashboard({ datasetId, datasetName, prefetchedR
           <SectionTitle icon={<TrendingDown size={14} />} title="Confidence Distribution" />
           <ResponsiveContainer width="100%" height={260}>
             <BarChart data={confidenceBarData} margin={{ top: 4, right: 8, left: -18, bottom: 4 }}>
-              <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
-              <XAxis dataKey="label" tick={{ fill: '#94a3b8', fontSize: 11 }} />
-              <YAxis tick={{ fill: '#94a3b8', fontSize: 10 }} width={28} />
+              <CartesianGrid strokeDasharray="3 3" stroke="#252538" />
+              <XAxis dataKey="label" tick={{ fill: '#A8A4B8', fontSize: 11 }} />
+              <YAxis tick={{ fill: '#A8A4B8', fontSize: 10 }} width={28} />
               <Tooltip contentStyle={TOOLTIP_STYLE} />
               <Bar dataKey="count" radius={[4, 4, 0, 0]}>
                 {confidenceBarData.map((entry, i) => (
@@ -269,31 +320,31 @@ export default function AnalyticsDashboard({ datasetId, datasetName, prefetchedR
             </BarChart>
           </ResponsiveContainer>
           <div className="mt-3 grid grid-cols-3 gap-2 text-center">
-            <div><p className="text-xs text-slate-500">Min</p><p className="text-sm font-semibold text-slate-200">{Math.round(report.confidence_stats.min * 100)}%</p></div>
-            <div><p className="text-xs text-slate-500">Mean</p><p className="text-sm font-semibold text-yellow-400">{Math.round(report.confidence_stats.mean * 100)}%</p></div>
-            <div><p className="text-xs text-slate-500">Max</p><p className="text-sm font-semibold text-slate-200">{Math.round(report.confidence_stats.max * 100)}%</p></div>
+            <div><p className="text-xs" style={{ color: '#5C5A72' }}>Min</p><p className="text-sm font-semibold" style={{ color: '#F0EDE8' }}>{Math.round(report.confidence_stats.min * 100)}%</p></div>
+            <div><p className="text-xs" style={{ color: '#5C5A72' }}>Mean</p><p className="text-sm font-semibold" style={{ color: '#FCD34D' }}>{Math.round(report.confidence_stats.mean * 100)}%</p></div>
+            <div><p className="text-xs" style={{ color: '#5C5A72' }}>Max</p><p className="text-sm font-semibold" style={{ color: '#F0EDE8' }}>{Math.round(report.confidence_stats.max * 100)}%</p></div>
           </div>
         </Card>
       </div>
 
-      {/* ── Row 3: Timeline Scatter ─────────────────────────────────────── */}
+      {/* ── Row 4: Timeline Scatter ─────────────────────────────────────────── */}
       {timelineScatterData.length > 0 && (
         <Card>
           <SectionTitle icon={<Activity size={14} />} title="Confidence Over Time (Timestamped Segments)" />
           <ResponsiveContainer width="100%" height={240}>
             <ScatterChart margin={{ top: 10, right: 20, left: -8, bottom: 24 }}>
-              <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
+              <CartesianGrid strokeDasharray="3 3" stroke="#252538" />
               <XAxis
                 type="number" dataKey="x" name="Time (s)"
-                tick={{ fill: '#94a3b8', fontSize: 10 }}
-                label={{ value: 'Time (s)', position: 'insideBottom', offset: -12, fill: '#64748b', fontSize: 11 }}
+                tick={{ fill: '#A8A4B8', fontSize: 10 }}
+                label={{ value: 'Time (s)', position: 'insideBottom', offset: -12, fill: '#5C5A72', fontSize: 11 }}
               />
               <YAxis
                 type="number" dataKey="y" name="Confidence"
                 domain={[0, 100]}
-                tick={{ fill: '#94a3b8', fontSize: 10 }}
+                tick={{ fill: '#A8A4B8', fontSize: 10 }}
                 width={36}
-                label={{ value: 'Conf %', angle: -90, position: 'insideLeft', offset: 10, fill: '#64748b', fontSize: 11 }}
+                label={{ value: 'Conf %', angle: -90, position: 'insideLeft', offset: 10, fill: '#5C5A72', fontSize: 11 }}
               />
               <ZAxis range={[40, 40]} />
               <Tooltip
@@ -303,53 +354,77 @@ export default function AnalyticsDashboard({ datasetId, datasetName, prefetchedR
                   if (!active || !payload?.length) return null
                   const d = payload[0].payload
                   return (
-                    <div style={TOOLTIP_STYLE} className="px-3 py-2">
-                      <p className="font-medium text-slate-200">{d.topic}</p>
-                      <p className="text-slate-400">Time: {d.x}s · Confidence: {d.y}%</p>
-                      <p style={{ color: SENTIMENT_COLORS[d.sentiment] ?? '#94a3b8' }}>{d.sentiment}</p>
+                    <div style={TOOLTIP_STYLE} className="px-3 py-2 max-w-[220px]">
+                      <p className="font-medium" style={{ color: '#F0EDE8' }}>{d.topic}</p>
+                      <p style={{ color: '#A8A4B8' }}>Time: {d.x}s · Conf: {d.y}%</p>
+                      <p style={{ color: SENTIMENT_COLORS[d.sentiment] ?? '#A8A4B8' }}>{d.sentiment}</p>
+                      <p className="text-xs mt-1 line-clamp-2" style={{ color: '#5C5A72' }}>{d.summary}</p>
                     </div>
                   )
                 }}
               />
               <Scatter
                 data={timelineScatterData}
-                fill="#6366f1"
+                fill="#D4A843"
                 shape={(props: any) => {
                   const { cx, cy, payload } = props
-                  return <circle cx={cx} cy={cy} r={5} fill={SENTIMENT_COLORS[payload.sentiment] ?? '#6366f1'} fillOpacity={0.85} />
+                  return <circle cx={cx} cy={cy} r={5} fill={SENTIMENT_COLORS[payload.sentiment] ?? '#D4A843'} fillOpacity={0.85} />
                 }}
               />
             </ScatterChart>
           </ResponsiveContainer>
-          <p className="text-xs text-slate-600 mt-1 text-center">Each dot = one timestamped feedback segment. Color = sentiment.</p>
+          <p className="text-xs mt-1 text-center" style={{ color: '#5C5A72' }}>
+            Each dot = one timestamped segment. Color = sentiment. Hover for detail.
+          </p>
         </Card>
       )}
 
-      {/* ── Row 4: Top Issues & Positives detail ───────────────────────── */}
+      {/* ── Row 5: Topic engagement scores ─────────────────────────────────── */}
+      <Card>
+        <SectionTitle icon={<TrendingUp size={14} />} title="Topic Engagement Scores" />
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-8 gap-y-3">
+          {report.topic_breakdown.map(t => (
+            <div key={t.topic}>
+              <div className="flex items-center justify-between">
+                <span className="text-sm" style={{ color: '#F0EDE8' }}>{t.topic}</span>
+                <span className="text-xs" style={{ color: '#5C5A72' }}>{t.total} mentions</span>
+              </div>
+              <EngagementBar score={t.engagement_score} />
+            </div>
+          ))}
+        </div>
+      </Card>
+
+      {/* ── Row 6: Top Issues & Positives detail ───────────────────────────── */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
         {[
-          { title: 'Top Positives', items: report.top_positives, color: '#10B981', bg: 'linear-gradient(135deg,#10B98110,#10B98106)', border: '#10B98120' },
-          { title: 'Top Issues',    items: report.top_issues,    color: '#EF4444', bg: 'linear-gradient(135deg,#EF444410,#EF444406)', border: '#EF444420' },
+          { title: 'Top Positives', items: report.top_positives, color: '#4ADE80', bg: 'linear-gradient(135deg,#4ADE8010,#4ADE8006)', border: '#4ADE8020' },
+          { title: 'Top Issues',    items: report.top_issues,    color: '#F87171', bg: 'linear-gradient(135deg,#F8717110,#F8717106)', border: '#F8717120' },
         ].map(({ title, items, color, bg, border }) => (
           <Card key={title}>
             <SectionTitle icon={<BarChart2 size={14} />} title={title} />
-            <div className="space-y-2">
-              {items.length === 0 && <p className="text-slate-500 text-xs">None detected.</p>}
+            <div className="space-y-3">
+              {items.length === 0 && <p className="text-xs" style={{ color: '#5C5A72' }}>None detected.</p>}
               {items.map((item, i) => (
                 <div
                   key={i}
-                  className="rounded-lg px-3 py-2.5 border"
-                  style={{
-                    background: bg,
-                    borderColor: border,
-                    borderLeft: `3px solid ${color}`,
-                  }}
+                  className="rounded-xl px-3 py-2.5 border"
+                  style={{ background: bg, borderColor: border, borderLeft: `3px solid ${color}` }}
                 >
-                  <div className="flex items-center justify-between gap-2">
+                  <div className="flex items-center justify-between gap-2 mb-1.5">
                     <span className="text-sm font-medium truncate" style={{ color }}>{item.topic}</span>
-                    <span className="text-xs text-slate-500 shrink-0">{item.count} mentions · {Math.round(item.avg_confidence * 100)}% conf</span>
+                    <span className="text-xs shrink-0" style={{ color: '#5C5A72' }}>
+                      {item.count} mentions · {Math.round(item.avg_confidence * 100)}% conf
+                    </span>
                   </div>
-                  <p className="text-xs text-slate-400 mt-0.5 line-clamp-2">{item.sample_summary}</p>
+                  <div className="space-y-1">
+                    {item.sample_summaries.map((s, j) => (
+                      <p key={j} className="text-xs flex gap-1.5" style={{ color: '#A8A4B8' }}>
+                        <span style={{ color: `${color}80` }}>›</span>
+                        <span className="line-clamp-1">{s}</span>
+                      </p>
+                    ))}
+                  </div>
                 </div>
               ))}
             </div>

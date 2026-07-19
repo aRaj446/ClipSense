@@ -47,6 +47,7 @@ export interface AnalyticsReport {
     neutral: number
     avg_confidence: number
     dominant_sentiment: string
+    engagement_score: number        // (positive - negative) / total, [-1.0, 1.0]
   }[]
   timeline: {
     timestamp: string | null
@@ -61,20 +62,28 @@ export interface AnalyticsReport {
     max: number
     high_confidence_count: number
     low_confidence_count: number
+    unanchored_count: number        // segments with no timestamp
   }
+  sentiment_velocity: {
+    minute: number
+    positive: number
+    negative: number
+    neutral: number
+    net: number
+  }[]
   top_issues: {
     topic: string
     sentiment: string
     count: number
     avg_confidence: number
-    sample_summary: string
+    sample_summaries: string[]      // up to 3 representative quotes
   }[]
   top_positives: {
     topic: string
     sentiment: string
     count: number
     avg_confidence: number
-    sample_summary: string
+    sample_summaries: string[]
   }[]
   total_segments: number
   analyzed_at: string
