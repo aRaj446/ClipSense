@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react'
-import { Loader2, CheckCircle, XCircle, RefreshCw, Square, Trash2, Sparkles } from 'lucide-react'
+import { Loader2, CheckCircle, XCircle, RefreshCw, Square, Trash2, Sparkles, MessageSquare } from 'lucide-react'
 import { SmartTrailerJob } from '../types/analysis'
 import { smartTrailerService } from '../services/smartTrailerService'
 import { useToast } from '../context/ToastContext'
@@ -14,11 +14,96 @@ const STATUS_LABEL: Record<SmartTrailerJob['status'], string> = {
   failed:     'Failed',
 }
 
-const STATUS_COLOR: Record<SmartTrailerJob['status'], string> = {
-  done:       '#10B981',
-  failed:     '#EF4444',
-  processing: '#2563EB',
-  pending:    '#2563EB',
+const MOOD_COLOR: Record<string, { bg: string; border: string; label: string }> = {
+  action:    { bg: '#F8717118', border: '#F87171', label: 'Action' },
+  emotional: { bg: '#8B7CF618', border: '#8B7CF6', label: 'Emotional' },
+  dialogue:  { bg: '#D4A84318', border: '#D4A843', label: 'Dialogue' },
+  calm:      { bg: '#2DD4BF18', border: '#2DD4BF', label: 'Calm' },
+}
+
+function fmt(secs: number) {
+  const m = Math.floor(secs / 60)
+  const s = Math.floor(secs % 60)
+  return `${m}:${s.toString().padStart(2, '0')}`
+}
+
+function ClipTimeline({ clips, totalDuration }: {
+  clips: NonNullable<SmartTrailerJob['editing_plan']>['clips']
+  totalDuration: number
+}) {
+  const [expanded, setExpanded] = useState<number | null>(null)
+
+  return (
+    <div className="mt-3 space-y-2">
+      <p className="text-xs font-medium uppercase tracking-wide" style={{ color: '#5C5A72' }}>
+        Clip Timeline — {clips.length} clips · {fmt(totalDuration)}
+      </p>
+
+      {/* Mood legend */}
+      <div className="flex gap-3 flex-wrap mb-1">
+        {Object.entries(MOOD_COLOR).map(([mood, { border, label }]) => (
+          <span key={mood} className="flex items-center gap-1 text-xs" style={{ color: '#A8A4B8' }}>
+            <span className="w-2 h-2 rounded-sm inline-block" style={{ background: border }} />
+            {label}
+          </span>
+        ))}
+      </div>
+
+      {/* Visual timeline bar */}
+      <div className="flex h-3 rounded-full overflow-hidden gap-px" style={{ background: '#252538' }}>
+        {clips.map((clip, i) => {
+          const pct  = ((clip.end_time - clip.start_time) / totalDuration) * 100
+          const mood = MOOD_COLOR[clip.mood_group] ?? MOOD_COLOR.calm
+          return (
+            <div key={i}
+              title={`${clip.topic} · ${fmt(clip.start_time)}–${fmt(clip.end_time)}`}
+              style={{ width: `${pct}%`, background: mood.border, opacity: 0.85, minWidth: 2 }}
+            />
+          )
+        })}
+      </div>
+
+      {/* Clip cards */}
+      <div className="space-y-1.5 max-h-64 overflow-y-auto pr-1">
+        {clips.map((clip, i) => {
+          const mood   = MOOD_COLOR[clip.mood_group] ?? MOOD_COLOR.calm
+          const isOpen = expanded === i
+          return (
+            <div key={i}
+              className="rounded-xl border cursor-pointer transition-all duration-150"
+              style={{ background: mood.bg, borderColor: mood.border + '40', borderLeft: `3px solid ${mood.border}` }}
+              onClick={() => setExpanded(isOpen ? null : i)}
+            >
+              <div className="flex items-center gap-2 px-3 py-2">
+                <span className="text-xs font-mono shrink-0" style={{ color: mood.border }}>
+                  {fmt(clip.start_time)}–{fmt(clip.end_time)}
+                </span>
+                <span className="text-xs truncate flex-1" style={{ color: '#F0EDE8' }}>{clip.topic}</span>
+                <span className="text-xs px-1.5 py-0.5 rounded-full shrink-0"
+                  style={{ background: mood.border + '22', color: mood.border }}>
+                  {mood.label}
+                </span>
+                <span className="text-xs shrink-0" style={{ color: '#5C5A72' }}>
+                  {fmt(clip.end_time - clip.start_time)}
+                </span>
+              </div>
+              {isOpen && (
+                <div className="px-3 pb-2.5 space-y-1.5">
+                  <p className="text-xs" style={{ color: '#A8A4B8' }}>{clip.reason}</p>
+                  {clip.transcript_text && (
+                    <div className="flex gap-1.5 items-start">
+                      <MessageSquare size={10} className="shrink-0 mt-0.5" style={{ color: '#5C5A72' }} />
+                      <p className="text-xs italic" style={{ color: '#5C5A72' }}>"{clip.transcript_text}"</p>
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          )
+        })}
+      </div>
+    </div>
+  )
 }
 
 export default function SmartTrailerPanel({ onSelectJob }: { onSelectJob?: (id: string) => void } = {}) {
@@ -86,10 +171,13 @@ export default function SmartTrailerPanel({ onSelectJob }: { onSelectJob?: (id: 
 
   const activeJob = jobs.find(j => j.id === activeJobId)
 
+  const statusColor = (s: SmartTrailerJob['status']) =>
+    s === 'done' ? '#4ADE80' : s === 'failed' ? '#F87171' : '#D4A843'
+
   if (loadingJobs) {
     return (
       <div className="flex justify-center py-12">
-        <Loader2 size={24} className="text-slate-500 animate-spin" />
+        <Loader2 size={24} className="animate-spin" style={{ color: '#5C5A72' }} />
       </div>
     )
   }
@@ -97,14 +185,12 @@ export default function SmartTrailerPanel({ onSelectJob }: { onSelectJob?: (id: 
   if (jobs.length === 0) {
     return (
       <Card variant="gradient" className="flex flex-col items-center py-16 text-center">
-        <div
-          className="w-16 h-16 rounded-2xl flex items-center justify-center mb-4"
-          style={{ background: 'linear-gradient(135deg,#2563EB14,#7C3AED14)', border: '1px solid #2563EB20' }}
-        >
-          <Sparkles size={28} className="text-slate-500" />
+        <div className="w-16 h-16 rounded-2xl flex items-center justify-center mb-4"
+          style={{ background: 'linear-gradient(135deg,#D4A84314,#8B7CF614)', border: '1px solid #D4A84320' }}>
+          <Sparkles size={28} style={{ color: '#5C5A72' }} />
         </div>
-        <p className="text-slate-300 font-medium">No smart trailers yet</p>
-        <p className="text-slate-500 text-sm mt-1">Go to Upload → Smart Trailer to generate one.</p>
+        <p className="font-medium" style={{ color: '#F0EDE8' }}>No smart trailers yet</p>
+        <p className="text-sm mt-1" style={{ color: '#5C5A72' }}>Go to Upload → Smart Trailer to generate one.</p>
       </Card>
     )
   }
@@ -114,87 +200,84 @@ export default function SmartTrailerPanel({ onSelectJob }: { onSelectJob?: (id: 
 
       {/* Active job banner */}
       {activeJob && (activeJob.status === 'pending' || activeJob.status === 'processing') && (
-        <div
-          className="flex items-center gap-3 rounded-lg px-4 py-3"
-          style={{
-            background: 'linear-gradient(135deg,#2563EB0A,#7C3AED08)',
-            border: '1px solid #2563EB20',
-            borderLeft: '3px solid #2563EB',
-          }}
-        >
-          <Loader2 size={16} className="text-primary animate-spin shrink-0" />
+        <div className="flex items-center gap-3 rounded-xl px-4 py-3"
+          style={{ background: '#D4A84309', border: '1px solid #D4A84320', borderLeft: '3px solid #D4A843' }}>
+          <Loader2 size={16} className="animate-spin shrink-0" style={{ color: '#D4A843' }} />
           <div className="flex-1 min-w-0">
-            <p className="text-slate-200 text-sm font-medium">{STATUS_LABEL[activeJob.status]}</p>
-            <p className="text-slate-500 text-xs mt-0.5">
-              ClipSense is analysing the sample trailer and planning clips from raw footage…
+            <p className="text-sm font-medium" style={{ color: '#F0EDE8' }}>{STATUS_LABEL[activeJob.status]}</p>
+            <p className="text-xs mt-0.5" style={{ color: '#5C5A72' }}>
+              Analysing sample trailer, classifying mood groups, composing with crossfades…
             </p>
           </div>
-          <button
-            onClick={handleCancel}
-            className="flex items-center gap-1 text-xs px-2.5 py-1.5 rounded-lg border border-red-500/30 text-red-400 hover:bg-red-500/10 transition-colors shrink-0"
-          >
+          <button onClick={handleCancel}
+            className="flex items-center gap-1 text-xs px-2.5 py-1.5 rounded-lg border transition-colors shrink-0"
+            style={{ borderColor: '#F8717130', color: '#F87171' }}>
             <Square size={11} /> Stop
           </button>
         </div>
       )}
 
       {/* Job list */}
-      <div className="space-y-2">
+      <div className="space-y-3">
         {jobs.map(job => (
-          <div
-            key={job.id}
-            className="rounded-lg overflow-hidden"
-            style={{
-              border: `1px solid ${STATUS_COLOR[job.status]}20`,
-              borderLeft: `3px solid ${STATUS_COLOR[job.status]}`,
-            }}
-          >
+          <div key={job.id} className="rounded-2xl overflow-hidden"
+            style={{ border: `1px solid ${statusColor(job.status)}20`, borderLeft: `3px solid ${statusColor(job.status)}` }}>
+
             <div
               className={`flex items-center gap-3 px-4 py-3 ${job.status === 'done' && onSelectJob ? 'cursor-pointer' : ''}`}
-              style={{ background: 'linear-gradient(145deg,#0E1525,#141E30)' }}
+              style={{ background: 'linear-gradient(145deg, #13131F, #1A1A2E)' }}
               onClick={() => job.status === 'done' && onSelectJob?.(job.id)}
             >
-              {job.status === 'done'   && <CheckCircle size={14} className="text-green-400 shrink-0" />}
-              {job.status === 'failed' && <XCircle     size={14} className="text-red-400 shrink-0" />}
+              {job.status === 'done'   && <CheckCircle size={14} style={{ color: '#4ADE80' }} className="shrink-0" />}
+              {job.status === 'failed' && <XCircle     size={14} style={{ color: '#F87171' }} className="shrink-0" />}
               {(job.status === 'pending' || job.status === 'processing') && (
-                <Loader2 size={14} className="text-primary animate-spin shrink-0" />
+                <Loader2 size={14} className="animate-spin shrink-0" style={{ color: '#D4A843' }} />
               )}
               <div className="flex-1 min-w-0">
-                <p className="text-slate-300 text-sm font-medium">
+                <p className="text-sm font-medium" style={{ color: '#F0EDE8' }}>
                   {STATUS_LABEL[job.status]}
                   {job.editing_plan && (
-                    <span className="ml-2 text-xs text-slate-500 font-normal">
-                      {job.editing_plan.clips.length} clips · {Math.round(job.editing_plan.target_duration)}s
+                    <span className="ml-2 text-xs font-normal" style={{ color: '#5C5A72' }}>
+                      {job.editing_plan.clips.length} clips · {fmt(job.editing_plan.target_duration)}
                     </span>
                   )}
                   {job.platform && (
-                    <span className="ml-2 text-xs text-slate-500 font-normal capitalize">· {job.platform}</span>
+                    <span className="ml-2 text-xs font-normal capitalize" style={{ color: '#5C5A72' }}>· {job.platform}</span>
                   )}
                 </p>
-                <p className="text-xs text-slate-600 truncate mt-0.5">
+                <p className="text-xs truncate mt-0.5" style={{ color: '#5C5A72' }}>
                   {job.raw_footage_name} + {job.sample_trailer_name}
                 </p>
-                {job.error_message && <p className="text-red-400 text-xs mt-0.5 truncate">{job.error_message}</p>}
+                {job.error_message && <p className="text-xs mt-0.5 truncate" style={{ color: '#F87171' }}>{job.error_message}</p>}
               </div>
               {job.clip_score != null && (
-                <span className="text-xs text-yellow-400 font-mono shrink-0">
+                <span className="text-xs font-mono shrink-0" style={{ color: '#FCD34D' }}>
                   {Math.round(job.clip_score * 100)}%
                 </span>
               )}
-              <span className="text-xs text-slate-600 shrink-0 hidden sm:inline">
+              <span className="text-xs shrink-0 hidden sm:inline" style={{ color: '#5C5A72' }}>
                 {new Date(job.updated_at).toLocaleString()}
               </span>
               {job.status === 'failed' && (
-                <button onClick={e => { e.stopPropagation(); handleRetry(job) }} className="text-slate-600 hover:text-slate-300 transition-colors shrink-0">
+                <button onClick={e => { e.stopPropagation(); handleRetry(job) }}
+                  className="transition-colors shrink-0" style={{ color: '#5C5A72' }}>
                   <RefreshCw size={13} />
                 </button>
               )}
               {(job.status === 'done' || job.status === 'failed') && (
-                <button onClick={e => { e.stopPropagation(); handleDelete(job.id) }} className="text-slate-600 hover:text-red-400 transition-colors shrink-0">
+                <button onClick={e => { e.stopPropagation(); handleDelete(job.id) }}
+                  className="transition-colors shrink-0" style={{ color: '#5C5A72' }}>
                   <Trash2 size={13} />
                 </button>
               )}
             </div>
+
+            {/* Clip timeline preview */}
+            {job.editing_plan && job.editing_plan.clips.length > 0 && (
+              <div className="px-4 pb-3" style={{ background: 'linear-gradient(145deg, #13131F, #1A1A2E)' }}>
+                <ClipTimeline clips={job.editing_plan.clips} totalDuration={job.editing_plan.target_duration} />
+              </div>
+            )}
           </div>
         ))}
       </div>

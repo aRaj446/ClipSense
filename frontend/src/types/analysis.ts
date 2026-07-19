@@ -26,7 +26,16 @@ export interface TrailerJob {
   status: 'pending' | 'processing' | 'done' | 'failed'
   output_url: string | null
   editing_plan: {
-    clips: { start_time: number; end_time: number; reason: string; topic: string; sentiment: string; platform?: string }[]
+    clips: {
+      start_time: number
+      end_time: number
+      reason: string
+      topic: string
+      sentiment: string
+      platform?: string
+      mood_group: string
+      transcript_text: string
+    }[]
     target_duration: number
     rationale: string
   } | null
@@ -147,7 +156,16 @@ export interface SmartTrailerJob {
   status: 'pending' | 'processing' | 'done' | 'failed'
   output_url: string | null
   editing_plan: {
-    clips: { start_time: number; end_time: number; reason: string; topic: string; sentiment: string; platform?: string }[]
+    clips: {
+      start_time: number
+      end_time: number
+      reason: string
+      topic: string
+      sentiment: string
+      platform?: string
+      mood_group: string
+      transcript_text: string
+    }[]
     target_duration: number
     rationale: string
   } | null

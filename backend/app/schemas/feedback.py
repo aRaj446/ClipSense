@@ -159,7 +159,9 @@ class TrailerClip(BaseModel):
     reason: str
     topic: str
     sentiment: str
-    platform: Optional[str] = None   # youtube | instagram | tiktok | twitter
+    platform: Optional[str] = None
+    mood_group: str = "calm"        # action | emotional | dialogue | calm
+    transcript_text: str = ""       # full transcript text for this clip
 
 
 class TrailerEditingPlan(BaseModel):

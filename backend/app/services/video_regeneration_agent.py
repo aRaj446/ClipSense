@@ -35,6 +35,8 @@ from app.utils.storage import UPLOAD_DIR, TRAILERS_DIR
 from app.utils.scene_detector import detect_scenes
 from app.utils.transcript import transcribe, find_safe_cut_point
 from app.utils.beat_detector import detect_beats, find_nearest_beat
+from app.utils.clip_planner import process_clips
+from app.utils.ffmpeg_composer import compose
 
 logger = logging.getLogger(__name__)
 
@@ -584,35 +586,40 @@ class VideoRegenerationAgent:
         platform   = best_raw.get("platform")
         clip_score = best_raw.get("clip_score")
 
-        # Clamp Gemini clip boundaries to valid range, then snap to speech/beat
-        beats = beat_data.get("strong_beats", [])
-        safe_clips = []
-        for c in best_raw["clips"]:
-            c["start_time"] = max(0.0, float(c.get("start_time", 0.0)))
-            c["end_time"]   = min(video_duration, float(c.get("end_time", video_duration))) if video_duration > 0 else float(c.get("end_time", 0.0))
-            if c["end_time"] - c["start_time"] < 2.0:
-                safe_clips.append(c)
-                continue
-            safe_start = find_safe_cut_point(c["start_time"], transcript)
-            safe_end   = find_safe_cut_point(c["end_time"],   transcript)
-            safe_start = find_nearest_beat(safe_start, beats)
-            safe_end   = find_nearest_beat(safe_end,   beats)
-            if safe_end - safe_start >= 2.0:
-                c["start_time"] = safe_start
-                c["end_time"]   = safe_end
-            safe_clips.append(c)
+        # Process clips: sentence-safe boundaries, 6s minimum, mood grouping
+        planned = process_clips(
+            raw_clips=best_raw["clips"],
+            transcript=transcript,
+            video_duration=video_duration,
+            video_path=input_path,
+            target_duration=best_raw.get("target_duration", target_duration),
+        )
+        if not planned:
+            return None, None, "No clips remained after processing.", None, None, gemini_used, fallback_warning
 
-        # Build TrailerEditingPlan from best raw plan
-        clips = [TrailerClip(**c) for c in safe_clips]
+        # Build TrailerEditingPlan
+        clips = [
+            TrailerClip(
+                start_time=c.start_time,
+                end_time=c.end_time,
+                reason=c.reason,
+                topic=c.topic,
+                sentiment=c.sentiment,
+                platform=platform,
+                mood_group=c.mood_group,
+                transcript_text=c.transcript_text,
+            )
+            for c in planned
+        ]
         plan = TrailerEditingPlan(
             clips=clips,
-            target_duration=best_raw.get("target_duration", target_duration),
+            target_duration=sum(c.end_time - c.start_time for c in planned),
             audio_fade_out=best_raw.get("audio_fade_out", True),
             output_format=best_raw.get("output_format", "mp4"),
             rationale=best_raw.get("rationale", ""),
         )
 
-        # Stage 3 — FFmpeg
+        # Stage 3 — FFmpeg compose
         output_filename = f"{project_id}_{platform}_{uuid.uuid4().hex[:8]}.mp4"
         output_path     = os.path.join(TRAILERS_DIR, output_filename)
 
@@ -620,7 +627,7 @@ class VideoRegenerationAgent:
             "VideoRegenerationAgent: platform=%s score=%.2f clips=%d → %s",
             platform, clip_score or 0, len(plan.clips), output_path,
         )
-        ok, err = _execute_plan(plan, input_path, output_path)
+        ok, err = compose(planned, input_path, output_path, transcript, plan.audio_fade_out)
 
         if not ok:
             return None, plan, err, platform, clip_score, gemini_used, fallback_warning
