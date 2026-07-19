@@ -40,6 +40,7 @@ class FeedbackDataset(Base):
     name       = Column(String, nullable=True)            # user-defined label, null until renamed
     raw_text   = Column(Text, nullable=False)
     source     = Column(String, default="manual_paste")  # manual_paste | file_upload | api
+    analytics_cache = Column(Text, nullable=True)         # JSON-serialised AnalyticsReport, null until first computed
     created_at = Column(
         DateTime,
         default=lambda: datetime.now(timezone.utc),

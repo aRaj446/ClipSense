@@ -196,7 +196,51 @@ def classify_clips_by_mood(
     return clips
 
 
-# ── Mood-group reordering ─────────────────────────────────────────────────────
+# ── Overlap / duplicate removal ──────────────────────────────────────────────
+
+def _remove_overlaps(clips: list[PlannedClip]) -> list[PlannedClip]:
+    """
+    Remove clips whose time ranges overlap with an already-accepted clip.
+    When two clips overlap, keep the longer one.
+    Clips are processed in original order; the first accepted clip wins
+    unless a later clip is strictly longer and covers the same window.
+    """
+    if len(clips) <= 1:
+        return clips
+
+    # Sort by start_time for sweep
+    sorted_clips = sorted(clips, key=lambda c: c.start_time)
+    accepted: list[PlannedClip] = []
+
+    for clip in sorted_clips:
+        overlapping = [
+            i for i, a in enumerate(accepted)
+            if clip.start_time < a.end_time and clip.end_time > a.start_time
+        ]
+        if not overlapping:
+            accepted.append(clip)
+        else:
+            # Replace the overlapping accepted clip if the new one is longer
+            idx = overlapping[0]
+            existing_dur = accepted[idx].end_time - accepted[idx].start_time
+            new_dur      = clip.end_time - clip.start_time
+            if new_dur > existing_dur:
+                logger.debug(
+                    "clip_planner: replacing overlap %.1f–%.1f with longer %.1f–%.1f",
+                    accepted[idx].start_time, accepted[idx].end_time,
+                    clip.start_time, clip.end_time,
+                )
+                accepted[idx] = clip
+
+    removed = len(clips) - len(accepted)
+    if removed:
+        logger.info("clip_planner: removed %d overlapping clip(s)", removed)
+
+    # Restore original mood-order after overlap removal
+    return accepted
+
+
+# ── Mood-group reordering ──────────────────────────────────────────────────────
 
 def reorder_by_mood(clips: list[PlannedClip]) -> list[PlannedClip]:
     """
@@ -287,13 +331,19 @@ def process_clips(
     if not planned:
         return planned
 
-    # Step 4: classify mood
+    # Step 4: remove overlapping clips — keep the longer one when two clips overlap
+    planned = _remove_overlaps(planned)
+
+    if not planned:
+        return planned
+
+    # Step 5: classify mood
     planned = classify_clips_by_mood(planned, video_path)
 
-    # Step 5: reorder by mood group
+    # Step 6: reorder by mood group
     planned = reorder_by_mood(planned)
 
-    # Step 6: trim to target_duration
+    # Step 7: trim to target_duration
     final: list[PlannedClip] = []
     total = 0.0
     for clip in planned:

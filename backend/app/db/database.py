@@ -62,6 +62,13 @@ def create_tables() -> None:
             except Exception:
                 pass  # column already exists
 
+        # analytics_cache column on feedback_datasets
+        try:
+            conn.execute(_text("ALTER TABLE feedback_datasets ADD COLUMN analytics_cache TEXT"))
+            conn.commit()
+        except Exception:
+            pass  # column already exists
+
         # New columns: gemini_used + fallback_warning on both job tables
         for table, col, coltype in [
             ("trailer_jobs",       "gemini_used",      "VARCHAR"),

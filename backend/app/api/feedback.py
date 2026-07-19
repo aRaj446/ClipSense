@@ -225,12 +225,19 @@ def rename_dataset(dataset_id: str, body: RenameDatasetRequest, db: Session = De
 def get_analytics(dataset_id: str, db: Session = Depends(get_db)):
     """
     Run the Analytics Agent on a saved dataset.
-    Returns a Power BI / Tableau-ready analytics payload.
+    Result is cached in the DB after first computation — subsequent calls
+    return the cached report instantly without recomputing.
     """
     ds = _dataset_service.get_dataset_by_id(db, dataset_id)
     if not ds:
         raise HTTPException(status_code=404, detail="Dataset not found")
 
+    # Return cached report if available
+    cached = _dataset_service.get_analytics_cache(db, dataset_id)
+    if cached:
+        return AnalyticsReport(**cached)
+
+    # Compute fresh and cache
     segments = [
         FeedbackSegment(
             timestamp=seg.timestamp,
@@ -241,7 +248,9 @@ def get_analytics(dataset_id: str, db: Session = Depends(get_db)):
         )
         for seg in ds.segments
     ]
-    return _analytics_agent.analyze(segments)
+    report = _analytics_agent.analyze(segments)
+    _dataset_service.set_analytics_cache(db, dataset_id, report.model_dump_json())
+    return report
 
 
 @router.get("/export-dataset/{dataset_id}")

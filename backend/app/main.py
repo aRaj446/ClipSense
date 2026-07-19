@@ -29,7 +29,18 @@ from app.db.database import create_tables
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     ensure_directories()
-    create_tables()   # Creates SQLite tables on first run — no-op on subsequent runs
+    create_tables()
+    # Pre-warm HuggingFace model in a background thread so the first
+    # feedback request doesn't block for 30-60s on a cold model load.
+    import threading
+    def _prewarm():
+        try:
+            from app.services.feedback_structuring_agent import _get_classifier
+            _get_classifier()
+        except Exception as exc:
+            import logging
+            logging.getLogger(__name__).warning("Model pre-warm failed: %s", exc)
+    threading.Thread(target=_prewarm, daemon=True, name="hf-prewarm").start()
     yield
 
 

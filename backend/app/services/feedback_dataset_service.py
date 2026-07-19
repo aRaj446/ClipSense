@@ -9,6 +9,7 @@ BEFORE Agent 2 runs optimization / sentiment classification.
 """
 
 import uuid
+import json
 from sqlalchemy.orm import Session
 
 from app.models.feedback_dataset import FeedbackDataset, FeedbackSegmentRecord
@@ -97,3 +98,21 @@ class FeedbackDatasetService:
         db.delete(dataset)
         db.commit()
         return True
+
+    def get_analytics_cache(self, db: Session, dataset_id: str) -> dict | None:
+        """Return cached AnalyticsReport JSON if available, else None."""
+        dataset = self.get_dataset_by_id(db, dataset_id)
+        if not dataset or not dataset.analytics_cache:
+            return None
+        try:
+            return json.loads(dataset.analytics_cache)
+        except Exception:
+            return None
+
+    def set_analytics_cache(self, db: Session, dataset_id: str, report_json: str) -> None:
+        """Persist a serialised AnalyticsReport against the dataset."""
+        dataset = self.get_dataset_by_id(db, dataset_id)
+        if not dataset:
+            return
+        dataset.analytics_cache = report_json
+        db.commit()
