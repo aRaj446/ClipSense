@@ -1,8 +1,8 @@
 import os
 from fastapi import UploadFile, HTTPException
 
-ALLOWED_EXTENSIONS = {".mp4", ".mov", ".avi"}
-ALLOWED_MIME_TYPES = {"video/mp4", "video/quicktime", "video/x-msvideo"}
+ALLOWED_EXTENSIONS = {".mp4", ".mov", ".avi", ".mkv", ".webm"}
+ALLOWED_MIME_TYPES = {"video/mp4", "video/quicktime", "video/x-msvideo", "video/x-matroska", "video/webm"}
 
 
 def validate_video_file(file: UploadFile) -> None:

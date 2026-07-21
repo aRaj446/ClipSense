@@ -2,8 +2,10 @@
   "name": "clipsense-root",
   "private": true,
   "scripts": {
-    "backend": "cd backend && ..\\venv\\Scripts\\uvicorn app.main:app --host 0.0.0.0 --port 8000",
-    "frontend": "cd frontend && npm run dev",
+    "kill:backend": "for /f \"tokens=5\" %a in ('netstat -ano ^| findstr :8000 ^| findstr LISTENING') do taskkill /pid %a /f",
+    "kill:frontend": "for /f \"tokens=5\" %a in ('netstat -ano ^| findstr :5173 ^| findstr LISTENING') do taskkill /pid %a /f",
+    "backend": "npm run kill:backend 2>nul & cd backend && venv\\Scripts\\uvicorn app.main:app --host 0.0.0.0 --port 8000",
+    "frontend": "npm run kill:frontend 2>nul & cd frontend && npm run dev",
     "dev": "start npm run backend && npm run frontend"
   }
 }

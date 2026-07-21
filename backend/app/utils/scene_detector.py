@@ -24,9 +24,16 @@ def detect_scenes(video_path: str, threshold: float = 27.0, min_scene_len: float
     """
     Detect shot boundaries in a video file.
 
+    Primary:  AdaptiveDetector — uses a rolling average of frame differences,
+              adapts to the video's own motion baseline. Significantly fewer
+              false positives on footage with camera movement, gradual lighting
+              changes, or slow fades compared to a fixed threshold.
+    Fallback: ContentDetector — used if AdaptiveDetector is unavailable
+              (scenedetect < 0.6.1) or raises an exception.
+
     Args:
         video_path:    Absolute path to the video file.
-        threshold:     ContentDetector sensitivity — lower = more cuts detected.
+        threshold:     ContentDetector fallback sensitivity (lower = more cuts).
         min_scene_len: Minimum scene length in seconds.
 
     Returns:
@@ -35,18 +42,38 @@ def detect_scenes(video_path: str, threshold: float = 27.0, min_scene_len: float
           - start_time:   float (seconds)
           - end_time:     float (seconds)
           - duration:     float (seconds)
-          - timestamp:    str  (MM:SS of scene start, for Gemini)
+          - timestamp:    str  (MM:SS of scene start)
     """
     try:
         import os
         video_path = os.path.normpath(video_path)
         from scenedetect import open_video, SceneManager
-        from scenedetect.detectors import ContentDetector
 
-        video = open_video(video_path)
+        video   = open_video(video_path)
         manager = SceneManager()
-        manager.add_detector(ContentDetector(threshold=threshold, min_scene_len=min_scene_len))
-        manager.detect_scenes(video, show_progress=False)
+
+        # Try AdaptiveDetector first — better on real-world footage
+        try:
+            from scenedetect.detectors import AdaptiveDetector
+            manager.add_detector(AdaptiveDetector(
+                adaptive_threshold=3.0,   # 3× local baseline to trigger a cut
+                window_width=3,           # 7-frame rolling window — more stable against flashes
+                min_content_val=15.0,     # ignore near-static frames
+                min_scene_len=min_scene_len,
+                weights=AdaptiveDetector.Components(
+                    delta_hue=1.0,
+                    delta_sat=1.0,
+                    delta_lum=1.0,
+                    delta_edges=0.5,      # partial edge sensitivity catches structural cuts
+                ),
+            ))
+            logger.debug("scene_detector: using AdaptiveDetector")
+        except ImportError:
+            from scenedetect.detectors import ContentDetector
+            manager.add_detector(ContentDetector(threshold=threshold, min_scene_len=min_scene_len))
+            logger.debug("scene_detector: AdaptiveDetector unavailable, using ContentDetector")
+
+        manager.detect_scenes(video, show_progress=False, frame_skip=4)
         scene_list = manager.get_scene_list()
 
         scenes = []

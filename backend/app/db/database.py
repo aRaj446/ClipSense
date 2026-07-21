@@ -18,11 +18,29 @@ from app.utils.storage import DB_PATH
 # ── Change only this line when moving to an online database ──────────────────
 DATABASE_URL = f"sqlite:///./{DB_PATH}"
 
-# check_same_thread=False is required for SQLite with FastAPI's threaded server
+# check_same_thread=False is required for SQLite with FastAPI's threaded server.
+# WAL mode allows concurrent readers alongside a single writer, eliminating
+# "database is locked" errors when background job threads commit while the
+# request thread is mid-read. busy_timeout gives writers up to 5s to retry
+# before raising an error rather than failing immediately.
 engine = create_engine(
     DATABASE_URL,
-    connect_args={"check_same_thread": False},
+    connect_args={
+        "check_same_thread": False,
+        "timeout": 30,          # busy_timeout in seconds for pysqlite
+    },
 )
+
+# Enable WAL mode and set busy timeout once at engine creation time
+from sqlalchemy import event as _sa_event
+
+@_sa_event.listens_for(engine, "connect")
+def _set_sqlite_pragmas(dbapi_conn, _):
+    cursor = dbapi_conn.cursor()
+    cursor.execute("PRAGMA journal_mode=WAL")
+    cursor.execute("PRAGMA busy_timeout=5000")  # 5 000 ms
+    cursor.execute("PRAGMA synchronous=NORMAL")  # safe with WAL, faster than FULL
+    cursor.close()
 
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 

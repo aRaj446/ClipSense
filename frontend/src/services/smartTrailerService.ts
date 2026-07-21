@@ -55,4 +55,22 @@ export const smartTrailerService = {
     const base = import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:8000'
     return `${base}${outputUrl}`
   },
+
+  subscribeProgress(
+    jobId: string,
+    onUpdate: (stage: string, percent: number, message: string, steps: any[]) => void,
+    onDone?: () => void,
+  ): () => void {
+    const base = import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:8000'
+    const es = new EventSource(`${base}/smart-trailer/job/${jobId}/progress`)
+    es.onmessage = (e) => {
+      try {
+        const d = JSON.parse(e.data)
+        onUpdate(d.stage, d.percent, d.message, d.steps ?? [])
+        if (d.stage === 'done' || d.stage === 'failed') { es.close(); onDone?.() }
+      } catch { /* ignore malformed */ }
+    }
+    es.onerror = () => es.close()
+    return () => es.close()
+  },
 }

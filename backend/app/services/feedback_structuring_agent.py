@@ -1,12 +1,12 @@
 """
 Feedback Structuring Agent — Stage 1
 
-Primary:  HuggingFace zero-shot classification (facebook/bart-large-mnli)
+Primary:  cardiffnlp/twitter-roberta-base-sentiment-latest (batched, ~500MB)
+          Sentiment classification runs in a single batched call — fast on CPU.
+          Topic classification uses regex keyword matching — instant.
           Runs fully local — no API key, no external calls.
-          Model is lazy-loaded on first use and cached for the process lifetime.
 
-Fallback: Regex + keyword heuristics — used if the model fails to load
-          or inference raises an exception.
+Fallback: Regex + keyword heuristics — used if the model fails to load.
 
 Pipeline contract (unchanged):
     FeedbackStructuringAgent.parse(raw_text: str) -> list[FeedbackSegment]
@@ -18,78 +18,53 @@ from app.schemas.feedback import FeedbackSegment
 
 logger = logging.getLogger(__name__)
 
-# ── Valid label sets ──────────────────────────────────────────────────────────
-
-VALID_TOPICS = [
-    "Camera", "Music", "Narration", "Transitions", "Intro", "Ending",
-    "Product Demo", "Subtitles", "Pacing", "Engagement", "Animation",
-    "Feature Explanation", "Pricing", "General",
-]
-
-VALID_SENTIMENTS = [
-    "Positive", "Negative", "Neutral", "Suggestion", "Complaint", "Praise", "Question",
-]
-
 # ── HuggingFace model (lazy singleton) ───────────────────────────────────────
 
-_classifier = None
-_MODEL_NAME = "facebook/bart-large-mnli"
+_sentiment_classifier = None
+_SENTIMENT_MODEL = "cardiffnlp/twitter-roberta-base-sentiment-latest"
+
+_CARDIFF_LABEL_MAP = {
+    "positive": "Positive",
+    "negative": "Negative",
+    "neutral":  "Neutral",
+    "label_0":  "Negative",
+    "label_1":  "Neutral",
+    "label_2":  "Positive",
+}
 
 
-def _get_classifier():
-    """Lazy-load the zero-shot classifier. Returns None if unavailable."""
-    global _classifier
-    if _classifier is not None:
-        return _classifier
+def _get_sentiment_classifier():
+    global _sentiment_classifier
+    if _sentiment_classifier is not None:
+        return _sentiment_classifier
     try:
         from transformers import pipeline
-        logger.info("FeedbackStructuringAgent: loading %s …", _MODEL_NAME)
-        _classifier = pipeline(
-            "zero-shot-classification",
-            model=_MODEL_NAME,
-            device=-1,          # CPU — set to 0 for GPU if available
-            multi_label=False,
+        logger.info("FeedbackStructuringAgent: loading %s …", _SENTIMENT_MODEL)
+        _sentiment_classifier = pipeline(
+            "sentiment-analysis",
+            model=_SENTIMENT_MODEL,
+            device=-1,
+            truncation=True,
+            max_length=512,
         )
-        logger.info("FeedbackStructuringAgent: model loaded successfully")
-        return _classifier
+        logger.info("FeedbackStructuringAgent: sentiment model loaded")
+        return _sentiment_classifier
     except Exception as exc:
-        logger.warning("FeedbackStructuringAgent: could not load HuggingFace model (%s) — regex fallback active", exc)
+        logger.warning("FeedbackStructuringAgent: sentiment model unavailable (%s) — regex fallback", exc)
         return None
-
-
-def _classify_line(clf, text: str) -> tuple[str, str, float]:
-    """
-    Run zero-shot classification for both topic and sentiment in two passes.
-    Returns (topic, sentiment, confidence).
-    Confidence is the geometric mean of both classification scores.
-    """
-    topic_result     = clf(text, VALID_TOPICS,     hypothesis_template="This feedback is about {}.")
-    sentiment_result = clf(text, VALID_SENTIMENTS, hypothesis_template="The sentiment of this feedback is {}.")
-
-    topic     = topic_result["labels"][0]
-    sentiment = sentiment_result["labels"][0]
-
-    # Geometric mean of top scores — reflects joint confidence
-    topic_score     = float(topic_result["scores"][0])
-    sentiment_score = float(sentiment_result["scores"][0])
-    confidence      = round((topic_score * sentiment_score) ** 0.5, 3)
-    confidence      = max(0.40, min(1.00, confidence))
-
-    return topic, sentiment, confidence
 
 
 # ── HuggingFace primary path ──────────────────────────────────────────────────
 
 def _hf_parse(raw_feedback: str) -> list[FeedbackSegment] | None:
-    """Parse feedback using HuggingFace zero-shot classification."""
-    clf = _get_classifier()
-    if clf is None:
+    """Batched sentiment inference + regex topic detection."""
+    sent_clf = _get_sentiment_classifier()
+    if sent_clf is None:
         return None
 
     raw_lines = re.split(r"[\n]+", raw_feedback)
-    segments: list[FeedbackSegment] = []
+    lines: list[str] = []
     seen: set[str] = set()
-
     for raw_line in raw_lines:
         line = _clean_line(raw_line)
         if len(line) < 8:
@@ -98,19 +73,41 @@ def _hf_parse(raw_feedback: str) -> list[FeedbackSegment] | None:
         if key in seen or key.strip("! ") in _SPAM_EXACT:
             continue
         seen.add(key)
+        lines.append(line)
 
-        try:
-            topic, sentiment, confidence = _classify_line(clf, line)
-        except Exception as exc:
-            logger.warning("FeedbackStructuringAgent: HF inference failed on line, skipping: %s", exc)
-            continue
+    if not lines:
+        return None
 
+    lines = lines[:50]
+
+    try:
+        results = sent_clf(lines, batch_size=16, truncation=True, max_length=128)
+    except Exception as exc:
+        logger.warning("FeedbackStructuringAgent: batch inference failed: %s", exc)
+        return None
+
+    segments: list[FeedbackSegment] = []
+    for line, result in zip(lines, results):
+        raw_label = result["label"].lower()
+        sentiment = _CARDIFF_LABEL_MAP.get(raw_label, "Neutral")
+        score     = float(result["score"])
+        lower     = line.lower()
+        if sentiment == "Positive" and any(w in lower for w in ("love", "amazing", "brilliant", "outstanding")):
+            sentiment = "Praise"
+        elif sentiment == "Negative" and any(w in lower for w in ("terrible", "awful", "worst", "hate")):
+            sentiment = "Complaint"
+        elif any(w in lower for w in ("wish", "should", "could", "suggest", "recommend", "maybe", "perhaps")):
+            sentiment = "Suggestion"
+            score = max(score, 0.75)
+        elif "?" in line:
+            sentiment = "Question"
+            score = max(score, 0.70)
         segments.append(FeedbackSegment(
             timestamp=_extract_timestamp(line),
-            topic=topic,
+            topic=_detect_topic(line),
             sentiment=sentiment,
             summary=line[:120],
-            confidence=confidence,
+            confidence=round(max(0.40, min(1.00, score)), 3),
         ))
 
     return segments if segments else None
@@ -214,7 +211,6 @@ def _regex_parse(raw_feedback: str) -> list[FeedbackSegment]:
     raw_lines = re.split(r'[\n]+', raw_feedback)
     segments: list[FeedbackSegment] = []
     seen: set[str] = set()
-
     for raw_line in raw_lines:
         line = _clean_line(raw_line)
         if len(line) < 8:
@@ -223,7 +219,6 @@ def _regex_parse(raw_feedback: str) -> list[FeedbackSegment]:
         if key in seen or key.strip('! ') in _SPAM_EXACT:
             continue
         seen.add(key)
-
         sentiment, confidence = _detect_sentiment(line)
         segments.append(FeedbackSegment(
             timestamp=_extract_timestamp(line),
@@ -238,22 +233,11 @@ def _regex_parse(raw_feedback: str) -> list[FeedbackSegment]:
 # ── Public interface ──────────────────────────────────────────────────────────
 
 class FeedbackStructuringAgent:
-    """
-    Stage 1 — Feedback Structuring Agent.
-
-    Parses raw unstructured audience feedback into structured FeedbackSegment list.
-
-    Primary:  HuggingFace zero-shot classification (facebook/bart-large-mnli).
-              Runs fully local — no API key required.
-    Fallback: Regex + keyword heuristics if the model is unavailable.
-    """
-
     def parse(self, raw_feedback: str) -> list[FeedbackSegment]:
         result = _hf_parse(raw_feedback)
         if result is not None:
             logger.info("FeedbackStructuringAgent: HuggingFace parsed %d segments", len(result))
             return result
-
         logger.warning("FeedbackStructuringAgent: HuggingFace unavailable — using regex fallback")
         segments = _regex_parse(raw_feedback)
         logger.info("FeedbackStructuringAgent: regex fallback parsed %d segments", len(segments))

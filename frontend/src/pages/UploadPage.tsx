@@ -180,7 +180,7 @@ export default function UploadPage() {
       {/* ── Standard ── */}
       {mode === 'standard' && (
         <>
-          <p className="text-slate-400 text-sm">MP4, MOV, AVI · Max 10 GB</p>
+          <p className="text-slate-400 text-sm">MP4, MOV, AVI, MKV, WEBM · Max 10 GB</p>
           {!pending ? (
             <FileUploader onFile={handleFile} />
           ) : (

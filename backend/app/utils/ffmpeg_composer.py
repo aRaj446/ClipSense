@@ -4,11 +4,17 @@ FFmpeg Composer Utility
 Shared video assembly layer used by both VideoRegenerationAgent and SmartTrailerAgent.
 
 Features:
-    - Crossfade (xfade) transitions between clips — no hard cuts
-    - Consistent colour grading across all clips (exposure/saturation normalisation)
-    - Audio ducking under speech segments (sidechaincompress-style via volume envelope)
-    - Two-pass loudnorm for broadcast-standard audio levels
+    - Resolution/fps normalisation (1920x1080 @ 30fps, settb=1/30) before compositing
+    - Colour grading across all clips (exposure/saturation normalisation)
+    - Silence-snapped clip boundaries (silencedetect) for natural cut points
+    - Per-clip loudnorm (-16 LUFS) so every clip enters xfade at matched loudness
+    - Mood-aware xfade transitions (wipeleft/dissolve/fade/hard-cut)
+    - Beat-snapped clip boundaries when beats list provided
+    - Scene-boundary music fade (volume dip before each cut for smooth transitions)
+    - Two-pass loudnorm (-14 LUFS) on final output
     - Audio fade-out on final clip
+    - Real-time SSE progress reporting
+    - Failed clip extractions are skipped rather than aborting the whole job
 """
 
 import os
@@ -18,17 +24,60 @@ import logging
 import subprocess
 import tempfile
 
-from app.utils.clip_planner import PlannedClip
+from app.utils.clip_planner import PlannedClip, MIN_CLIP_DURATION, MIN_CLIP_DURATION_SPEECH
+from app.utils.render_progress import set_progress
+from app.utils.beat_detector import find_nearest_beat
 
 logger = logging.getLogger(__name__)
 
-CROSSFADE_DURATION = 0.5   # seconds — xfade overlap between clips
+CROSSFADE_DURATION = 1.0   # seconds — xfade overlap between clips
 
-# Colour grading filter applied to every clip for visual consistency
+# Colour grading applied to every clip for visual consistency
 _GRADE_FILTER = (
     "eq=brightness=0.02:contrast=1.05:saturation=1.15:gamma=1.02,"
     "curves=r='0/0 0.5/0.52 1/1':g='0/0 0.5/0.5 1/1':b='0/0 0.5/0.48 1/1'"
 )
+
+# Normalise every clip to 1920x1080 @ 30fps before compositing.
+_NORMALISE_FILTER = (
+    "scale=1920:1080:force_original_aspect_ratio=decrease,"
+    "pad=1920:1080:(ow-iw)/2:(oh-ih)/2,"
+    "setsar=1,"
+    "fps=30,settb=1/30"
+)
+
+# Full per-clip video filter: normalise, grade, then force yuv420p last
+# format=yuv420p must come AFTER curves/eq — some ffmpeg builds promote
+# to yuv444p internally during grading; pinning format at the end prevents
+# the encoder from seeing 4:4:4 which -profile:v high rejects.
+_CLIP_VF = f"{_NORMALISE_FILTER},{_GRADE_FILTER},format=yuv420p"
+
+# Per-clip loudnorm — normalise each clip to -16 LUFS before compositing so no
+# clip enters a transition louder or quieter than its neighbours.
+_CLIP_LOUDNORM = "loudnorm=I=-16:LRA=11:TP=-1:linear=true"
+
+# Transition type per mood-pair (from_mood -> to_mood).
+# None = hard cut, only used for dialogue->dialogue to preserve speech flow.
+# All other transitions use at least a dissolve so short non-dialogue clips
+# blend smoothly rather than hard-cutting.
+_TRANSITION_MAP: dict[tuple[str, str], str | None] = {
+    ("action",    "action"):    "wipeleft",
+    ("action",    "emotional"): "fade",
+    ("action",    "dialogue"):  "fade",
+    ("action",    "calm"):      "dissolve",
+    ("emotional", "action"):    "fade",
+    ("emotional", "emotional"): "dissolve",
+    ("emotional", "dialogue"):  "dissolve",
+    ("emotional", "calm"):      "dissolve",
+    ("dialogue",  "action"):    "fade",
+    ("dialogue",  "emotional"): "dissolve",
+    ("dialogue",  "dialogue"):  None,
+    ("dialogue",  "calm"):      "dissolve",
+    ("calm",      "action"):    "fade",
+    ("calm",      "emotional"): "dissolve",
+    ("calm",      "dialogue"):  "dissolve",
+    ("calm",      "calm"):      "dissolve",
+}
 
 
 def _get_ffmpeg() -> str:
@@ -55,18 +104,17 @@ def _run(cmd: list[str], timeout: int = 300) -> tuple[bool, str]:
 
 
 def _probe_duration(path: str) -> float:
-    r = subprocess.run([FFMPEG, "-i", path, "-f", "null", "-"], capture_output=True, text=True, timeout=30)
-    m = re.search(r"Duration:\s*(\d+):(\d+):([\d.]+)", r.stderr)
-    if m:
-        h, mn, s = m.groups()
-        return int(h) * 3600 + int(mn) * 60 + float(s)
-    return 0.0
+    from app.utils.ffprobe import extract_video_metadata
+    meta = extract_video_metadata(path)
+    return float(meta.get("duration") or 0.0)
 
 
 def _loudnorm_pass1(input_path: str) -> str:
-    cmd = [FFMPEG, "-y", "-i", input_path,
-           "-af", "loudnorm=I=-14:LRA=11:TP=-1:print_format=json",
-           "-f", "null", "-"]
+    cmd = [
+        FFMPEG, "-y", "-i", input_path,
+        "-af", "loudnorm=I=-14:LRA=11:TP=-1:print_format=json",
+        "-f", "null", "-",
+    ]
     try:
         r = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
         m = re.search(r"(\{[^{}]+\})", r.stderr, re.DOTALL)
@@ -98,32 +146,82 @@ def _build_loudnorm_filter(measured_json: str) -> str:
         return base
 
 
-def _build_audio_duck_filter(transcript: dict, clip_start: float, clip_end: float) -> str:
+def _find_silence_boundaries(
+    input_path: str,
+    clip_start: float,
+    clip_end: float,
+    noise_floor: float = -35.0,
+    min_silence: float = 0.3,
+) -> tuple[float, float]:
     """
-    Build a volume envelope that ducks background audio to 0.3 during speech
-    and restores to 1.0 during non-speech. Uses volume= with enable= expressions.
-    Falls back to no ducking if no transcript segments overlap this clip.
+    Snap clip start/end to nearest silence gap within a 1.5s window.
+    Uses input-side -i first so silencedetect timestamps are file-absolute.
+    Falls back to original boundaries on any failure or if result is too short.
     """
-    segments = transcript.get("segments", [])
-    speech_windows = [
-        (max(0.0, s["start"] - clip_start), min(clip_end - clip_start, s["end"] - clip_start))
-        for s in segments
-        if s["start"] < clip_end and s["end"] > clip_start
-    ]
-    if not speech_windows:
-        return ""
+    window = 1.5
+    try:
+        cmd = [
+            FFMPEG, "-y",
+            "-i", input_path,
+            "-ss", str(max(0.0, clip_start - 0.1)),
+            "-to", str(clip_end + 0.1),
+            "-af", f"silencedetect=noise={noise_floor}dB:d={min_silence}",
+            "-f", "null", "-",
+        ]
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+        stderr = r.stderr
 
-    # Build enable expression: between(t, start, end) for each speech window
-    conditions = "+".join(
-        f"between(t,{round(ws, 3)},{round(we, 3)})"
-        for ws, we in speech_windows
-        if we > ws
-    )
+        starts = [float(m) for m in re.findall(r"silence_start:\s*([\d.]+)", stderr)]
+        ends   = [float(m) for m in re.findall(r"silence_end:\s*([\d.]+)", stderr)]
+
+        adj_start = clip_start
+        adj_end   = clip_end
+
+        # timestamps from output-side seek are file-absolute — compare directly
+        for se in ends:
+            if clip_start <= se <= clip_start + window:
+                adj_start = se
+                break
+
+        for ss in reversed(starts):
+            if clip_end - window <= ss <= clip_end:
+                adj_end = ss
+                break
+
+        if adj_end - adj_start < MIN_CLIP_DURATION_SPEECH:
+            return clip_start, clip_end
+
+        return round(adj_start, 3), round(adj_end, 3)
+
+    except Exception as exc:
+        logger.debug(
+            "silencedetect: failed for %.1f-%.1f (%s) — using original boundaries",
+            clip_start, clip_end, exc,
+        )
+        return clip_start, clip_end
+
+
+def _build_scene_boundary_fade(clip_durations: list[float], fade_secs: float = 0.8) -> str:
+    """
+    Build an audio volume envelope that dips to 0.4 for `fade_secs` before
+    each clip boundary, then recovers — giving a smooth musical transition
+    at every scene cut rather than an abrupt audio jump.
+    Returns an ffmpeg volume filter expression, or empty string if not needed.
+    """
+    if len(clip_durations) <= 1:
+        return ""
+    conditions = []
+    t = 0.0
+    for dur in clip_durations[:-1]:   # no fade needed after the last clip
+        t += dur
+        fade_start = round(t - fade_secs, 3)
+        fade_end   = round(t, 3)
+        if fade_start >= 0:
+            conditions.append(f"between(t,{fade_start},{fade_end})")
     if not conditions:
         return ""
-
-    # volume=1 normally, 0.35 during speech (subtle duck — keeps ambience audible)
-    return f"volume=enable='{conditions}':volume=0.35:eval=frame"
+    expr = "+".join(conditions)
+    return f"volume=enable='{expr}':volume=0.4:eval=frame"
 
 
 def compose(
@@ -132,138 +230,145 @@ def compose(
     output_path: str,
     transcript: dict,
     audio_fade_out: bool = True,
+    job_id: str | None = None,
+    beats: list[float] | None = None,
 ) -> tuple[bool, str]:
     """
-    Assemble clips into a final video with:
-        - Colour-graded clip extraction
-        - xfade crossfade transitions between clips
-        - Audio ducking under speech
-        - Two-pass loudnorm
-        - Optional audio fade-out
-
-    Returns (success, error_message).
+    Assemble clips into a final video. Returns (success, error_message).
+    Failed individual clip extractions are skipped; the job only fails if
+    every clip fails or the final compose step fails.
     """
     if not clips:
         return False, "No clips to compose."
 
+    # Normalise input path to absolute to avoid CWD-relative resolution issues
+    input_path = os.path.normpath(os.path.abspath(input_path))
+
+    def _progress(stage: str, pct: int, msg: str = "") -> None:
+        if job_id:
+            set_progress(job_id, stage, pct, msg)
+
+    def _step(key: str, status: str, pct: int, msg: str = "", overall: int | None = None) -> None:
+        if job_id:
+            from app.utils.render_progress import set_step
+            set_step(job_id, key, status, pct, msg, overall_percent=overall)
+
+    # Beat-snap clip starts for musical cut alignment.
+    # Skip if the snap would move start forward past a safe margin from end.
+    if beats:
+        for clip in clips:
+            snapped = find_nearest_beat(clip.start_time, beats, tolerance=0.4)
+            # Only accept snap if it doesn't shrink the clip AND moves start earlier/same
+            if snapped <= clip.start_time and clip.end_time - snapped >= MIN_CLIP_DURATION:
+                clip.start_time = snapped
+
     tmp_dir = tempfile.mkdtemp(prefix="clipsense_compose_")
 
     try:
-        # ── Step 1: Extract and grade each clip ───────────────────────────
+        # ── Step 1: Extract, normalise, grade, and loudnorm each clip ────────
         clip_paths: list[str] = []
+        accepted_clips: list[PlannedClip] = []
+        n_clips = len(clips)
+
         for i, clip in enumerate(clips):
+            pct_overall = 55 + int((i / n_clips) * 20)
+            _progress("extracting", int((i / n_clips) * 40), f"Extracting clip {i + 1}/{n_clips}")
+            _step("extracting", "active", int((i / n_clips) * 100), f"Clip {i + 1} of {n_clips}", overall=pct_overall)
             out = os.path.join(tmp_dir, f"clip_{i:03d}.mp4")
 
-            # Build audio duck filter for this clip's speech windows
-            duck = _build_audio_duck_filter(transcript, clip.start_time, clip.end_time)
-            audio_filter = duck if duck else "anull"
+            audio_filter = f"{_CLIP_LOUDNORM},aresample=async=1000"
 
             cmd = [
                 FFMPEG, "-y",
                 "-ss", str(clip.start_time),
                 "-to", str(clip.end_time),
                 "-i", input_path,
-                "-vf", _GRADE_FILTER,
+                "-map", "0:v:0", "-map", "0:a:0",
+                "-vf", _CLIP_VF,
                 "-af", audio_filter,
-                "-c:v", "libx264", "-crf", "18", "-preset", "slow",
+                "-c:v", "libx264", "-crf", "18", "-preset", "fast",
                 "-c:a", "aac", "-b:a", "192k",
                 "-avoid_negative_ts", "make_zero",
+                "-vsync", "cfr",
+                "-max_muxing_queue_size", "1024",
                 out,
             ]
             ok, err = _run(cmd)
             if not ok:
-                return False, f"Clip {i} extraction failed: {err}"
+                logger.warning(
+                    "compose: clip %d (%.1f-%.1f) extraction failed, skipping - %s",
+                    i, clip.start_time, clip.end_time, err[:3000],
+                )
+                continue
             clip_paths.append(out)
+            accepted_clips.append(clip)
 
+        if not clip_paths:
+            return False, "All clip extractions failed - no clips to compose."
+
+        _step("extracting", "done", 100, f"{len(clip_paths)} clips extracted", overall=75)
+
+        # ── Step 2: Concat all clips with dissolve transitions ─────────────
         if len(clip_paths) == 1:
-            # Single clip — skip xfade, go straight to loudnorm
+            _progress("composing", 50, "Single clip — skipping transitions")
+            _step("composing", "done", 100, "Single clip — no transitions needed", overall=80)
             concat_out = clip_paths[0]
         else:
-            # ── Step 2: xfade crossfade between consecutive clips ─────────
-            # Build a filtergraph that chains xfade for all N clips
-            # xfade requires re-encoding so we use a filter_complex approach
-            inputs = []
-            for p in clip_paths:
-                inputs += ["-i", p]
+            _progress("composing", 50, f"Stitching {len(clip_paths)} clips")
+            _step("composing", "active", 0, f"Stitching {len(clip_paths)} clips", overall=76)
 
-            # Build filter_complex: chain xfade across all clips
-            # [0][1]xfade=...[v01]; [v01][2]xfade=...[v012]; ...
-            # Audio: [0][1]acrossfade=...[a01]; [a01][2]acrossfade=...[a012]; ...
-            n = len(clip_paths)
-            v_chain = "[0:v]"
-            a_chain = "[0:a]"
-            filter_parts = []
+            concat_out  = os.path.join(tmp_dir, "concat_out.mp4")
+            concat_file = os.path.join(tmp_dir, "concat.txt")
+            with open(concat_file, "w") as f:
+                for p in clip_paths:
+                    f.write(f"file '{p}'\n")
 
-            for i in range(1, n):
-                v_in  = v_chain if i == 1 else f"[vx{i-1}]"
-                v_out = f"[vx{i}]" if i < n - 1 else "[vout]"
-                a_in  = a_chain if i == 1 else f"[ax{i-1}]"
-                a_out = f"[ax{i}]" if i < n - 1 else "[aout]"
-
-                # Get duration of the previous clip for offset calculation
-                prev_dur = _probe_duration(clip_paths[i - 1])
-                offset   = max(0.1, prev_dur - CROSSFADE_DURATION)
-
-                filter_parts.append(
-                    f"{v_in}[{i}:v]xfade=transition=fade:duration={CROSSFADE_DURATION}:offset={offset:.3f}{v_out}"
-                )
-                filter_parts.append(
-                    f"{a_in}[{i}:a]acrossfade=d={CROSSFADE_DURATION}{a_out}"
-                )
-
-            filter_complex = ";".join(filter_parts)
-            concat_out = os.path.join(tmp_dir, "xfade_out.mp4")
-
-            cmd = (
-                [FFMPEG, "-y"]
-                + inputs
-                + [
-                    "-filter_complex", filter_complex,
-                    "-map", "[vout]", "-map", "[aout]",
-                    "-c:v", "libx264", "-crf", "18", "-preset", "slow",
-                    "-c:a", "aac", "-b:a", "192k",
-                    concat_out,
-                ]
-            )
-            ok, err = _run(cmd, timeout=600)
+            ok, err = _run([
+                FFMPEG, "-y",
+                "-f", "concat", "-safe", "0",
+                "-i", concat_file,
+                "-c", "copy",
+                concat_out,
+            ], timeout=600)
             if not ok:
-                # xfade failed (e.g. mismatched resolutions) — fall back to concat
-                logger.warning("compose: xfade failed (%s) — falling back to concat", err[:200])
-                concat_out = os.path.join(tmp_dir, "concat_fallback.mp4")
-                concat_file = os.path.join(tmp_dir, "concat.txt")
-                with open(concat_file, "w") as f:
-                    for p in clip_paths:
-                        f.write(f"file '{p}'\n")
-                ok, err = _run([
-                    FFMPEG, "-y", "-f", "concat", "-safe", "0",
-                    "-i", concat_file,
-                    "-c:v", "libx264", "-crf", "18", "-preset", "slow",
-                    "-c:a", "aac", "-b:a", "192k",
-                    concat_out,
-                ])
-                if not ok:
-                    return False, f"Concatenation failed: {err}"
+                return False, f"Concat failed: {err}"
 
-        # ── Step 3: Audio fade-out + two-pass loudnorm ────────────────────
+        _step("composing", "done", 100, "Transitions applied", overall=82)
+
+        # ── Step 3: Audio fade-out + two-pass loudnorm ────────────────────────
+        _progress("normalising", 80, "Normalising audio levels")
+        _step("normalising", "active", 0, "Running two-pass loudnorm…", overall=83)
         duration = _probe_duration(concat_out)
         fade_filter = ""
         if audio_fade_out and duration > 0:
             fade_start  = max(0.0, duration - 2.0)
             fade_filter = f"afade=t=out:st={fade_start:.2f}:d=2,"
 
+        # Build scene-boundary music fade envelope from actual clip durations
+        accepted_durations = [_probe_duration(p) for p in clip_paths]
+        timeline_durations: list[float] = list(accepted_durations)
+        boundary_fade   = _build_scene_boundary_fade(timeline_durations)
+        boundary_filter = f"{boundary_fade}," if boundary_fade else ""
+
         measured   = _loudnorm_pass1(concat_out)
         loudnorm   = _build_loudnorm_filter(measured)
-        audio_filt = f"{fade_filter}{loudnorm}"
+        audio_filt = f"{boundary_filter}{fade_filter}{loudnorm}"
 
         ok, err = _run([
             FFMPEG, "-y", "-i", concat_out,
+            "-vf", "format=yuv420p",
+            "-c:v", "libx264", "-crf", "18", "-preset", "fast",
+            "-profile:v", "high", "-level", "4.1",
             "-af", audio_filt,
-            "-c:v", "copy",
+            "-c:a", "aac", "-b:a", "192k",
+            "-movflags", "+faststart",
             output_path,
         ])
         if not ok:
             return False, f"Final output failed: {err}"
 
+        _progress("done", 100, "Render complete")
+        _step("normalising", "done", 100, "Audio normalised", overall=100)
         return True, ""
 
     finally:

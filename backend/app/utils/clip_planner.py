@@ -5,21 +5,22 @@ Shared post-processing layer applied to every clip plan before FFmpeg execution.
 Used by both VideoRegenerationAgent (Stage 3) and SmartTrailerAgent (Stage 4).
 
 Responsibilities:
-    1. Enforce 6-second minimum clip duration — extend or drop clips below threshold
-    2. Strict transcript-safe boundaries — extend clip end to complete the current
-       sentence; never cut mid-word or mid-sentence
-    3. Mood/energy classification — label each clip as 'action', 'emotional',
+    1. Expand clip boundaries to cover the full dialogue window in the segment
+    2. Snap end to nearest sentence boundary (±1.5s)
+    3. Enforce minimum duration — dialogue clips: length of speech (floor 3s),
+       non-dialogue clips: 3s hard floor
+    4. Mood/energy classification — label each clip as 'action', 'emotional',
        'dialogue', or 'calm' using librosa RMS energy analysis
-    4. Mood-group reordering — keep similar mood clips together to avoid
-       continuous pace changes; order: action → emotional → dialogue → calm
+    5. Mood-group reordering — narrative arc: hook → build → resolve → wind-down
 """
 
 import logging
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 logger = logging.getLogger(__name__)
 
-MIN_CLIP_DURATION = 6.0   # seconds — hard minimum for any clip in the final output
+MIN_CLIP_DURATION         = 3.0   # seconds — fallback minimum for non-dialogue clips
+MIN_CLIP_DURATION_SPEECH  = 3.0   # seconds — absolute floor even for dialogue clips
 
 # Mood group order for final assembly
 _MOOD_ORDER = {"action": 0, "emotional": 1, "dialogue": 2, "calm": 3}
@@ -40,63 +41,92 @@ class PlannedClip:
 
 # ── Transcript helpers ────────────────────────────────────────────────────────
 
+def get_dialogue_window(
+    start: float,
+    end: float,
+    transcript: dict,
+) -> tuple[float | None, float | None]:
+    """
+    Return (dialogue_start, dialogue_end) for all transcript segments that
+    overlap [start, end]. Returns (None, None) if no speech in this window.
+    """
+    segments = transcript.get("segments", [])
+    overlapping = [
+        seg for seg in segments
+        if seg["start"] < end and seg["end"] > start
+    ]
+    if not overlapping:
+        return None, None
+    return overlapping[0]["start"], overlapping[-1]["end"]
+
+
+def extend_to_full_dialogue(
+    start: float,
+    end: float,
+    transcript: dict,
+    video_duration: float,
+) -> tuple[float, float]:
+    """
+    Expand start/end to cover only the transcript segments that overlap
+    [start, end]. Does NOT chain into adjacent segments outside the window.
+    """
+    segments = transcript.get("segments", [])
+    overlapping = [s for s in segments if s["start"] < end and s["end"] > start]
+    if not overlapping:
+        return start, end
+    new_start = min(start, overlapping[0]["start"])
+    new_end   = max(end,   overlapping[-1]["end"])
+    return round(new_start, 3), round(min(new_end, video_duration), 3)
+
+
 def extend_to_sentence_end(
     start: float,
     end: float,
     transcript: dict,
     video_duration: float,
-    tolerance: float = 4.0,
+    tolerance: float = 1.5,
 ) -> tuple[float, float]:
     """
-    Strictly extend clip boundaries so no sentence is cut mid-way.
-
-    - start is snapped BACK to the start of any sentence that begins within
-      tolerance seconds after the desired start (never cut into ongoing speech)
-    - end is extended FORWARD to the end of any sentence that overlaps the
-      desired end boundary (never cut off a sentence in progress)
-
-    Returns (adjusted_start, adjusted_end).
+    Extend clip end to the nearest sentence boundary within ±tolerance seconds.
+    Never chains through multiple segments — only extends by at most tolerance seconds.
     """
     segments = transcript.get("segments", [])
     if not segments:
         return start, end
 
-    adj_start = start
     adj_end   = end
+    best_dist = float("inf")
 
-    # Find any sentence that starts within [start, start+tolerance]
-    # and snap start back to its beginning so we don't enter mid-sentence
     for seg in segments:
-        if start <= seg["start"] <= start + tolerance:
-            adj_start = min(adj_start, seg["start"])
-            break
+        if abs(seg["end"] - end) <= tolerance and abs(seg["end"] - end) < best_dist:
+            best_dist = abs(seg["end"] - end)
+            adj_end   = seg["end"]
 
-    # Find any sentence whose end falls within [end-tolerance, end+tolerance]
-    # and extend our clip end to cover it completely
-    for seg in segments:
-        seg_start = seg["start"]
-        seg_end   = seg["end"]
-        # Sentence overlaps our clip end — extend to cover it
-        if seg_start < adj_end < seg_end:
-            adj_end = seg_end
-        # Sentence starts just after our clip end — include it if within tolerance
-        elif adj_end <= seg_start <= adj_end + tolerance:
-            adj_end = seg_end
-
-    adj_start = max(0.0, adj_start)
-    adj_end   = min(video_duration, adj_end)
-    return round(adj_start, 3), round(adj_end, 3)
+    adj_end = min(video_duration, adj_end)
+    return round(start, 3), round(adj_end, 3)
 
 
 def get_transcript_text(start: float, end: float, transcript: dict) -> str:
-    """Extract all transcript text that falls within [start, end]."""
+    """Extract all transcript text that overlaps [start, end]."""
     segments = transcript.get("segments", [])
     parts = [
         seg["text"].strip()
         for seg in segments
-        if seg["start"] >= start - 0.5 and seg["end"] <= end + 0.5
+        if seg["start"] < end + 0.5 and seg["end"] > start - 0.5
     ]
     return " ".join(parts).strip()
+
+
+def dialogue_duration(start: float, end: float, transcript: dict) -> float:
+    """Return total seconds of speech within [start, end]."""
+    segments = transcript.get("segments", [])
+    total = 0.0
+    for seg in segments:
+        seg_s = max(seg["start"], start)
+        seg_e = min(seg["end"],   end)
+        if seg_e > seg_s:
+            total += seg_e - seg_s
+    return round(total, 3)
 
 
 # ── Energy / mood classification ──────────────────────────────────────────────
@@ -121,13 +151,10 @@ def _extract_clip_energy(
 
 def classify_mood(energy: float, energy_max: float, transcript_text: str) -> str:
     """
-    Classify a clip's mood group based on energy level and transcript content.
-
-    Thresholds (relative to max energy in the video):
-        > 70% of max  → action
-        > 40% of max  → emotional  (if speech present) or action (if no speech)
-        > 15% of max  → dialogue   (if speech present) or calm
-        ≤ 15% of max  → calm
+    Classify a clip's mood group based on normalised energy [0,1] and transcript.
+    Thresholds are adaptive (set by KMeans caller); this function uses pre-computed
+    centroid boundaries passed as energy_max=boundary tuple when called from
+    classify_clips_by_mood, or falls back to fixed ratios for standalone use.
     """
     if energy_max <= 0:
         return "calm"
@@ -140,6 +167,58 @@ def classify_mood(energy: float, energy_max: float, transcript_text: str) -> str
     if ratio > 0.40:
         return "emotional" if has_speech else "action"
     if ratio > 0.15:
+        return "dialogue" if has_speech else "calm"
+    return "calm"
+
+
+def _kmeans_thresholds(energies: list[float]) -> tuple[float, float, float]:
+    """
+    Fit KMeans (k=4) on clip energies and return the three boundary values
+    that separate the four mood groups (action / emotional / dialogue / calm).
+    Falls back to fixed ratios if sklearn is unavailable or too few clips.
+    Returns (high_thresh, mid_thresh, low_thresh) as fractions of energy_max.
+    """
+    if len(energies) < 4:
+        return 0.70, 0.40, 0.15
+    try:
+        import numpy as np
+        from sklearn.cluster import KMeans
+
+        X = np.array(energies).reshape(-1, 1)
+        km = KMeans(n_clusters=4, n_init=10, random_state=42)
+        km.fit(X)
+        centres = sorted(float(c[0]) for c in km.cluster_centers_)
+        energy_max = max(energies)
+        if energy_max <= 0:
+            return 0.70, 0.40, 0.15
+        # Boundaries are midpoints between adjacent sorted centroids
+        b1 = (centres[2] + centres[3]) / 2 / energy_max   # action threshold
+        b2 = (centres[1] + centres[2]) / 2 / energy_max   # emotional threshold
+        b3 = (centres[0] + centres[1]) / 2 / energy_max   # dialogue threshold
+        logger.debug("clip_planner: KMeans thresholds action=%.3f emotional=%.3f dialogue=%.3f", b1, b2, b3)
+        return b1, b2, b3
+    except Exception as exc:
+        logger.warning("clip_planner: KMeans failed (%s) — using fixed thresholds", exc)
+        return 0.70, 0.40, 0.15
+
+
+def _classify_mood_adaptive(
+    energy: float,
+    energy_max: float,
+    transcript_text: str,
+    thresholds: tuple[float, float, float],
+) -> str:
+    """Classify mood using KMeans-derived adaptive thresholds."""
+    if energy_max <= 0:
+        return "calm"
+    ratio = energy / energy_max
+    has_speech = bool(transcript_text.strip())
+    high, mid, low = thresholds
+    if ratio > high:
+        return "action"
+    if ratio > mid:
+        return "emotional" if has_speech else "action"
+    if ratio > low:
         return "dialogue" if has_speech else "calm"
     return "calm"
 
@@ -177,9 +256,12 @@ def classify_clips_by_mood(
         energies = [_extract_clip_energy(y, sr, c.start_time, c.end_time) for c in clips]
         energy_max = max(energies) if energies else 1.0
 
+        # Derive adaptive thresholds via KMeans on this video's energy distribution
+        thresholds = _kmeans_thresholds(energies)
+
         for clip, energy in zip(clips, energies):
             clip.energy     = round(energy / energy_max if energy_max > 0 else 0.0, 3)
-            clip.mood_group = classify_mood(energy, energy_max, clip.transcript_text)
+            clip.mood_group = _classify_mood_adaptive(energy, energy_max, clip.transcript_text, thresholds)
 
         import shutil
         shutil.rmtree(tmp_dir, ignore_errors=True)
@@ -200,18 +282,13 @@ def classify_clips_by_mood(
 
 def _remove_overlaps(clips: list[PlannedClip]) -> list[PlannedClip]:
     """
-    Remove clips whose time ranges overlap with an already-accepted clip.
-    When two clips overlap, keep the longer one.
-    Clips are processed in original order; the first accepted clip wins
-    unless a later clip is strictly longer and covers the same window.
+    Chronological sweep — used internally before mood classification.
+    Sorts by start_time, keeps the longer clip when two overlap.
     """
     if len(clips) <= 1:
         return clips
-
-    # Sort by start_time for sweep
     sorted_clips = sorted(clips, key=lambda c: c.start_time)
     accepted: list[PlannedClip] = []
-
     for clip in sorted_clips:
         overlapping = [
             i for i, a in enumerate(accepted)
@@ -220,23 +297,39 @@ def _remove_overlaps(clips: list[PlannedClip]) -> list[PlannedClip]:
         if not overlapping:
             accepted.append(clip)
         else:
-            # Replace the overlapping accepted clip if the new one is longer
             idx = overlapping[0]
-            existing_dur = accepted[idx].end_time - accepted[idx].start_time
-            new_dur      = clip.end_time - clip.start_time
-            if new_dur > existing_dur:
-                logger.debug(
-                    "clip_planner: replacing overlap %.1f–%.1f with longer %.1f–%.1f",
-                    accepted[idx].start_time, accepted[idx].end_time,
-                    clip.start_time, clip.end_time,
-                )
+            if (clip.end_time - clip.start_time) > (accepted[idx].end_time - accepted[idx].start_time):
                 accepted[idx] = clip
-
     removed = len(clips) - len(accepted)
     if removed:
-        logger.info("clip_planner: removed %d overlapping clip(s)", removed)
+        logger.info("clip_planner: removed %d overlapping clip(s) (chronological pass)", removed)
+    return accepted
 
-    # Restore original mood-order after overlap removal
+
+def _remove_overlaps_preserve_order(clips: list[PlannedClip]) -> list[PlannedClip]:
+    """
+    Order-preserving sweep — used AFTER mood reordering.
+    Iterates in narrative order; skips any clip whose time range overlaps
+    an already-accepted clip. Keeps the first-seen (higher narrative priority).
+    """
+    if len(clips) <= 1:
+        return clips
+    accepted: list[PlannedClip] = []
+    for clip in clips:
+        overlaps = any(
+            clip.start_time < a.end_time and clip.end_time > a.start_time
+            for a in accepted
+        )
+        if not overlaps:
+            accepted.append(clip)
+        else:
+            logger.debug(
+                "clip_planner: dropping duplicate %.1f–%.1f (overlaps accepted clip)",
+                clip.start_time, clip.end_time,
+            )
+    removed = len(clips) - len(accepted)
+    if removed:
+        logger.info("clip_planner: removed %d overlapping clip(s) (order-preserving pass)", removed)
     return accepted
 
 
@@ -244,10 +337,16 @@ def _remove_overlaps(clips: list[PlannedClip]) -> list[PlannedClip]:
 
 def reorder_by_mood(clips: list[PlannedClip]) -> list[PlannedClip]:
     """
-    Reorder clips so similar moods are grouped together.
-    Order: action → emotional → dialogue → calm
-    Within each group, preserve original relative order.
-    Always keep the highest-energy clip first (strong opening).
+    Arrange clips into a narrative arc: hook → build → peak → resolve → calm.
+    Avoids back-to-back sentiment flips by grouping similar moods together
+    while following a cinematic energy curve rather than a flat mood dump.
+
+    Arc shape (by mood):
+        1. Hook:    1 high-energy action clip (strong opener)
+        2. Build:   remaining action clips interleaved with emotional
+        3. Peak:    emotional clips
+        4. Resolve: dialogue clips
+        5. Wind-down: calm clips
     """
     if len(clips) <= 1:
         return clips
@@ -256,15 +355,47 @@ def reorder_by_mood(clips: list[PlannedClip]) -> list[PlannedClip]:
     for clip in clips:
         groups.setdefault(clip.mood_group, []).append(clip)
 
-    reordered: list[PlannedClip] = []
-    for mood in sorted(_MOOD_ORDER, key=lambda m: _MOOD_ORDER[m]):
-        reordered.extend(groups[mood])
+    # Sort each group by energy descending so highest-energy leads each section
+    for g in groups:
+        groups[g].sort(key=lambda c: c.energy, reverse=True)
 
-    # Ensure the highest-energy clip opens the trailer
-    if reordered:
-        best_idx = max(range(len(reordered)), key=lambda i: reordered[i].energy)
-        if best_idx != 0:
-            reordered.insert(0, reordered.pop(best_idx))
+    action    = groups["action"]
+    emotional = groups["emotional"]
+    dialogue  = groups["dialogue"]
+    calm      = groups["calm"]
+
+    reordered: list[PlannedClip] = []
+
+    # 1. Hook — single strongest action clip
+    if action:
+        reordered.append(action[0])
+        action = action[1:]
+
+    # 2. Build — interleave remaining action with emotional for gradual escalation
+    build = []
+    a_iter = iter(action)
+    e_iter = iter(emotional)
+    a_done = e_done = False
+    while not (a_done and e_done):
+        if not a_done:
+            c = next(a_iter, None)
+            if c is None:
+                a_done = True
+            else:
+                build.append(c)
+        if not e_done:
+            c = next(e_iter, None)
+            if c is None:
+                e_done = True
+            else:
+                build.append(c)
+    reordered.extend(build)
+
+    # 3. Resolve — dialogue
+    reordered.extend(dialogue)
+
+    # 4. Wind-down — calm
+    reordered.extend(calm)
 
     return reordered
 
@@ -280,13 +411,16 @@ def process_clips(
 ) -> list[PlannedClip]:
     """
     Full clip processing pipeline:
-        1. Convert raw dicts to PlannedClip objects
-        2. Extend boundaries to complete sentences (strict)
-        3. Enforce 6-second minimum — extend if possible, drop if not
-        4. Classify mood via librosa energy
-        5. Reorder by mood group
-        6. Re-enforce target_duration after reorder
+        1. Expand boundaries to cover overlapping dialogue segments only
+        2. Snap end to nearest sentence boundary (±1.5s)
+        3. Enforce minimum duration:
+               dialogue clips  → length of the dialogue itself (min 3s)
+               non-dialogue    → 3s hard floor
+        4. Remove overlapping clips (chronological, keep longer)
+        5. Classify mood via librosa energy (for transition selection only)
+        6. Trim to target_duration
 
+    Clips are kept in chronological order — reordering destroys A/V sync.
     Returns final list of PlannedClip objects ready for FFmpeg.
     """
     planned: list[PlannedClip] = []
@@ -295,27 +429,40 @@ def process_clips(
         start = max(0.0, float(raw.get("start_time", 0.0)))
         end   = min(video_duration, float(raw.get("end_time", video_duration)))
 
-        # Step 1: extend to sentence boundaries
+        # Step 1: expand to cover the full dialogue in this window
+        start, end = extend_to_full_dialogue(start, end, transcript, video_duration)
+
+        # Step 2: also snap end to nearest sentence boundary
         start, end = extend_to_sentence_end(start, end, transcript, video_duration)
 
-        # Step 2: enforce 6-second minimum
-        if end - start < MIN_CLIP_DURATION:
-            # Try extending end first
-            extended_end = min(video_duration, start + MIN_CLIP_DURATION)
-            extended_end_safe, _ = extend_to_sentence_end(start, extended_end, transcript, video_duration)
-            extended_end = max(extended_end, extended_end_safe)
-            if extended_end - start >= MIN_CLIP_DURATION:
-                end = extended_end
+        # Step 3: determine minimum duration for this clip
+        speech_dur = dialogue_duration(start, end, transcript)
+        if speech_dur > 0:
+            # Dialogue clip — minimum is the dialogue length itself, floor at 3s
+            min_dur = max(MIN_CLIP_DURATION_SPEECH, speech_dur)
+        else:
+            # No dialogue — 3s minimum
+            min_dur = MIN_CLIP_DURATION
+
+        if end - start < min_dur:
+            extended_end = min(video_duration, start + min_dur)
+            # Try to snap the extended end to a sentence boundary too
+            _, extended_end = extend_to_sentence_end(start, extended_end, transcript, video_duration)
+            extended_end = max(start + min_dur, extended_end)
+            if extended_end - start >= min_dur:
+                end = min(video_duration, extended_end)
             else:
-                # Try pulling start back
-                extended_start = max(0.0, end - MIN_CLIP_DURATION)
-                if end - extended_start >= MIN_CLIP_DURATION:
+                extended_start = max(0.0, end - min_dur)
+                if end - extended_start >= min_dur:
                     start = extended_start
                 else:
-                    logger.debug("clip_planner: dropping clip %.1f–%.1f (too short after extension)", start, end)
+                    logger.debug(
+                        "clip_planner: dropping clip %.1f–%.1f (too short after extension, min=%.1fs)",
+                        start, end, min_dur,
+                    )
                     continue
 
-        # Step 3: get transcript text for this clip
+        # Step 4: get transcript text for this clip
         text = get_transcript_text(start, end, transcript)
 
         planned.append(PlannedClip(
@@ -331,27 +478,36 @@ def process_clips(
     if not planned:
         return planned
 
-    # Step 4: remove overlapping clips — keep the longer one when two clips overlap
+    # Step 5: remove overlapping clips — sort chronologically, keep longer
     planned = _remove_overlaps(planned)
 
     if not planned:
         return planned
 
-    # Step 5: classify mood
+    # Step 6: classify mood for transition selection (does NOT reorder)
     planned = classify_clips_by_mood(planned, video_path)
 
-    # Step 6: reorder by mood group
-    planned = reorder_by_mood(planned)
-
-    # Step 7: trim to target_duration
-    final: list[PlannedClip] = []
-    total = 0.0
-    for clip in planned:
-        dur = clip.end_time - clip.start_time
-        if total + dur > target_duration + 5.0:   # allow 5s overshoot for sentence completion
-            break
-        final.append(clip)
-        total += dur
+    # Step 7: trim to target_duration (skipped when inf passed)
+    if target_duration == float("inf"):
+        final = planned
+        total = sum(c.end_time - c.start_time for c in final)
+    else:
+        final: list[PlannedClip] = []
+        total = 0.0
+        for clip in planned:
+            dur = clip.end_time - clip.start_time
+            if total + dur > target_duration + 5.0:
+                break
+            final.append(clip)
+            total += dur
+        # Trim last clip back only if it has no dialogue
+        if final and total > target_duration:
+            last = final[-1]
+            last_speech = dialogue_duration(last.start_time, last.end_time, transcript)
+            if last_speech == 0:
+                trimmed_end = last.end_time - (total - target_duration)
+                if trimmed_end - last.start_time >= MIN_CLIP_DURATION:
+                    last.end_time = round(trimmed_end, 3)
 
     logger.info(
         "clip_planner: %d clips → %d after processing (%.1fs total)",

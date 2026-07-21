@@ -27,8 +27,7 @@ import uuid
 import logging
 import subprocess
 import re
-from collections import defaultdict, Counter
-from concurrent.futures import ThreadPoolExecutor
+from collections import Counter
 
 from app.schemas.feedback import (
     FeedbackSegment,
@@ -45,6 +44,8 @@ from app.utils.clip_planner import process_clips
 from app.utils.ffmpeg_composer import compose
 
 logger = logging.getLogger(__name__)
+
+MIN_NO_SPEECH = 3.0  # seconds — minimum duration for non-dialogue clips
 
 _POSITIVE_SENTIMENTS = {"Positive", "Praise"}
 _NEGATIVE_SENTIMENTS = {"Negative", "Complaint"}
@@ -220,24 +221,33 @@ def _plan_clips_from_raw(
     """
     Select clips from raw footage using:
     - Scene boundaries from PySceneDetect (prefer whole scenes)
-    - Beat alignment from librosa (prefer scene starts near strong beats)
+    - Beat alignment from librosa (snap start/end to nearest strong beat)
     - Sentiment-informed topic scoring (prefer scenes matching positive patterns)
     - 6s minimum clip duration enforced at selection stage
     """
-    strong_beats = set(raw_beats.get("strong_beats", []))
+    from app.utils.beat_detector import find_nearest_beat
+    strong_beats = raw_beats.get("strong_beats", [])
+    all_beats    = raw_beats.get("beats", [])
     pos_topics   = set(analysis.get("top_scene_categories", []))
     neg_patterns = analysis.get("negative_patterns", [])
 
     # Score each scene
     def scene_score(scene: dict) -> float:
         score = 0.0
-        # Prefer scenes on or near a strong beat
+        # Check if this scene has dialogue
+        from app.utils.clip_planner import get_transcript_text
+        clip_text = get_transcript_text(scene["start_time"], scene["end_time"], transcript)
+        has_speech = bool(clip_text.strip())
+        # Dialogue scenes are prioritised — they carry the story
+        if has_speech:
+            score += 2.0
+        # Prefer scenes on or near a strong beat (secondary to dialogue)
         if any(abs(scene["start_time"] - b) <= 0.5 for b in strong_beats):
-            score += 1.0
+            score += 0.5
         # Prefer scenes whose duration matches positive pacing
         if 6.0 <= scene["duration"] <= 20.0:
             score += 0.5
-        # Penalise scenes matching negative patterns (by position heuristic)
+        # Penalise scenes matching negative patterns
         for pat in neg_patterns:
             if "slow" in pat.lower() and scene["duration"] > 20.0:
                 score -= 0.5
@@ -252,18 +262,52 @@ def _plan_clips_from_raw(
 
     clips = []
     total = 0.0
+    pos_topics_list = sorted(pos_topics)  # deterministic order
     for scene in scored:
-        if total + scene["duration"] > target_duration:
+        if total >= target_duration:
             break
+
+        # Check for dialogue in this scene
+        from app.utils.clip_planner import get_transcript_text, get_dialogue_window
+        clip_text = get_transcript_text(scene["start_time"], scene["end_time"], transcript)
+        has_speech = bool(clip_text.strip())
+
+        if has_speech:
+            # Dialogue takes priority — expand to cover the full dialogue window,
+            # never snap to beat (beat snapping would cut mid-sentence)
+            d_start, d_end = get_dialogue_window(
+                scene["start_time"], scene["end_time"], transcript
+            )
+            snapped_start = min(scene["start_time"], d_start) if d_start is not None else scene["start_time"]
+            snapped_end   = max(scene["end_time"],   d_end)   if d_end   is not None else scene["end_time"]
+        else:
+            # No dialogue — snap start to nearest beat for musical alignment
+            snapped_start = find_nearest_beat(scene["start_time"], all_beats, tolerance=0.4)
+            snapped_end   = scene["end_time"]
+            if snapped_end - snapped_start < MIN_NO_SPEECH:
+                snapped_start = scene["start_time"]
+
+        snapped_start = max(0.0, snapped_start)
+        snapped_end   = min(raw_duration, snapped_end)
+
+        # Trim last clip to fit target exactly (respect dialogue minimum)
+        remaining = target_duration - total
+        clip_dur  = snapped_end - snapped_start
+        min_dur   = MIN_NO_SPEECH if not has_speech else clip_dur  # never trim dialogue
+        if clip_dur > remaining and remaining >= min_dur:
+            snapped_end = snapped_start + remaining
+        top_topic = (pos_topics_list[0] if pos_topics_list else "General") if has_speech else "General"
+        sentiment = "Positive" if scene_score(scene) >= 1.0 else ("Neutral" if scene_score(scene) >= 0.5 else "Negative")
+
         clips.append({
-            "start_time": scene["start_time"],
-            "end_time":   scene["end_time"],
+            "start_time": round(snapped_start, 3),
+            "end_time":   round(snapped_end, 3),
             "reason":     f"Scene selected by beat-alignment and sentiment scoring (score={scene_score(scene):.1f})",
-            "topic":      "General",
-            "sentiment":  "Positive",
+            "topic":      top_topic,
+            "sentiment":  sentiment,
             "platform":   "youtube",
         })
-        total += scene["duration"]
+        total += snapped_end - snapped_start
 
     # If no scored scenes qualify, fall back to all valid scenes in order
     if not clips:
@@ -345,6 +389,25 @@ class SmartTrailerAgent:
                str | None, str | None, float | None, bool, str | None]:
 
         # ── Stage 1: Parse comments ───────────────────────────────────────────
+        from app.utils.render_progress import set_progress, init_steps, set_step
+        _STEPS = [
+            {"key": "comments",   "label": "Parsing audience comments",  "status": "pending", "percent": 0},
+            {"key": "sample",     "label": "Analysing sample trailer",    "status": "pending", "percent": 0},
+            {"key": "scenes",     "label": "Detecting scenes",            "status": "pending", "percent": 0},
+            {"key": "transcript", "label": "Transcribing audio",          "status": "pending", "percent": 0},
+            {"key": "beats",      "label": "Analysing beat rhythm",       "status": "pending", "percent": 0},
+            {"key": "planning",   "label": "Planning clip selection",     "status": "pending", "percent": 0},
+            {"key": "extracting", "label": "Extracting clips",            "status": "pending", "percent": 0},
+            {"key": "composing",  "label": "Composing transitions",       "status": "pending", "percent": 0},
+            {"key": "normalising","label": "Normalising audio",           "status": "pending", "percent": 0},
+        ]
+        # Only initialise if steps not already set by the API layer
+        from app.utils.render_progress import get_progress as _gp
+        if not (_gp(job_id) or {}).get("steps"):
+            set_progress(job_id, "parsing", 0, "Starting pipeline", steps=_STEPS)
+            init_steps(job_id, _STEPS)
+
+        set_step(job_id, "comments", "active", 0, "Parsing audience comments…", overall_percent=2)
         raw_text = _read_comments_file(comments_path)
         if not raw_text.strip():
             return None, None, None, "Comments file is empty or unreadable.", None, None, False, None
@@ -353,15 +416,14 @@ class SmartTrailerAgent:
         if not segments:
             return None, None, None, "No feedback segments could be extracted from comments.", None, None, False, None
 
+        set_step(job_id, "comments", "done", 100, f"{len(segments)} segments parsed", overall_percent=8)
         logger.info("SmartTrailerAgent: parsed %d comment segments", len(segments))
 
         # ── Stage 2: Analyse sample trailer ──────────────────────────────────
+        set_step(job_id, "sample", "active", 0, "Analysing sample trailer…", overall_percent=10)
         try:
-            with ThreadPoolExecutor(max_workers=2) as pool:
-                fut_dur   = pool.submit(_get_video_duration, sample_trailer_path)
-                fut_shots = pool.submit(detect_scenes, sample_trailer_path)
-                sample_duration = fut_dur.result()
-                sample_shots    = fut_shots.result()
+            sample_duration = _get_video_duration(sample_trailer_path)
+            sample_shots    = detect_scenes(sample_trailer_path)
         except Exception as exc:
             logger.warning("SmartTrailerAgent: sample trailer pre-processing failed: %s", exc)
             sample_duration = 120.0
@@ -371,33 +433,39 @@ class SmartTrailerAgent:
             sample_duration = 120.0
 
         analysis_raw = _analyse_sample_trailer(segments, sample_duration, sample_shots)
+        set_step(job_id, "sample", "done", 100, f"{len(sample_shots)} shots analysed", overall_percent=18)
         logger.info("SmartTrailerAgent: Stage 2 analysis complete — %d positive patterns", len(analysis_raw["positive_patterns"]))
 
-        # ── Stage 3: Pre-process raw footage ─────────────────────────────────
+        # ── Stage 3: Pre-process raw footage (sequential — CPU-bound tasks) ──
+        set_step(job_id, "scenes",     "active", 0, "Detecting shot boundaries…", overall_percent=20)
         try:
-            with ThreadPoolExecutor(max_workers=4) as pool:
-                fut_dur        = pool.submit(_get_video_duration, raw_footage_path)
-                fut_shots      = pool.submit(detect_scenes, raw_footage_path)
-                fut_transcript = pool.submit(transcribe, raw_footage_path)
-                fut_beats      = pool.submit(detect_beats, raw_footage_path)
-                raw_duration   = fut_dur.result()
-                raw_shots      = fut_shots.result()
-                raw_transcript = fut_transcript.result()
-                raw_beats      = fut_beats.result()
+            raw_duration = _get_video_duration(raw_footage_path)
+            if raw_duration <= 0:
+                return None, None, None, "Could not determine raw footage duration.", None, None, False, None
+
+            raw_shots = detect_scenes(raw_footage_path)
+            set_step(job_id, "scenes", "done", 100, f"{len(raw_shots)} scenes detected", overall_percent=30)
+
+            set_step(job_id, "transcript", "active", 0, "Transcribing audio…", overall_percent=31)
+            raw_transcript = transcribe(raw_footage_path)
+            set_step(job_id, "transcript", "done", 100, f"{len(raw_transcript['segments'])} segments transcribed", overall_percent=40)
+
+            set_step(job_id, "beats", "active", 0, "Analysing beat rhythm…", overall_percent=41)
+            raw_beats = detect_beats(raw_footage_path)
+            set_step(job_id, "beats", "done", 100, f"{raw_beats['beat_count']} beats at {raw_beats['tempo']:.0f} BPM", overall_percent=48)
+
         except Exception as exc:
             return None, None, None, f"Raw footage pre-processing failed: {exc}", None, None, False, None
-
-        if raw_duration <= 0:
-            return None, None, None, "Could not determine raw footage duration.", None, None, False, None
 
         logger.info(
             "SmartTrailerAgent: raw footage — %.1fs, %d shots, %d transcript segs, %.1f BPM",
             raw_duration, len(raw_shots), len(raw_transcript["segments"]), raw_beats["tempo"],
         )
 
-        target_duration = max(30.0, min(120.0, round(raw_duration * 0.15)))
+        target_duration = max(60.0, min(120.0, round(raw_duration * 0.25)))
 
         # ── Stage 3: Plan clips ───────────────────────────────────────────────
+        set_step(job_id, "planning", "active", 0, "Scoring and selecting clips…", overall_percent=50)
         plan_raw = _plan_clips_from_raw(
             analysis_raw, raw_duration, target_duration,
             raw_shots, raw_beats, raw_transcript,
@@ -406,6 +474,7 @@ class SmartTrailerAgent:
         if not plan_raw.get("clips"):
             return None, None, None, "No clips could be planned from raw footage.", None, None, False, None
 
+        set_step(job_id, "planning", "done", 100, f"{len(plan_raw['clips'])} clips planned", overall_percent=55)
         platform   = plan_raw["platform"]
         clip_score = plan_raw["clip_score"]
 
@@ -421,18 +490,35 @@ class SmartTrailerAgent:
             scene_selection_rationale=plan_raw["scene_selection_rationale"],
         )
 
-        # ── Stage 4: Clip processing + FFmpeg composition ─────────────────────
-        planned = process_clips(
-            raw_clips=plan_raw["clips"],
-            transcript=raw_transcript,
-            video_duration=raw_duration,
-            video_path=raw_footage_path,
-            target_duration=target_duration,
-        )
+        # ── Stage 4: Convert plan → PlannedClip + mood classification only ──
+        # Do NOT run process_clips — the planner already selected, bounded, and
+        # budgeted every clip. Re-running boundary expansion + overlap removal
+        # on score-sorted (non-chronological) clips destroys most of them.
+        from app.utils.clip_planner import PlannedClip, classify_clips_by_mood, get_transcript_text
+        planned: list[PlannedClip] = [
+            PlannedClip(
+                start_time=float(c["start_time"]),
+                end_time=float(c["end_time"]),
+                reason=c.get("reason", ""),
+                topic=c.get("topic", "General"),
+                sentiment=c.get("sentiment", "Positive"),
+                platform=c.get("platform", "youtube"),
+                transcript_text=get_transcript_text(
+                    float(c["start_time"]), float(c["end_time"]), raw_transcript
+                ),
+            )
+            for c in plan_raw["clips"]
+        ]
+        # Sort chronologically so FFmpeg extracts in timeline order
+        planned.sort(key=lambda c: c.start_time)
+        # Mood classification only — for xfade transition selection
+        planned = classify_clips_by_mood(planned, raw_footage_path)
+
         if not planned:
             return None, None, analysis, "No clips remained after processing.", platform, clip_score, False, None
 
-        logger.info("SmartTrailerAgent: %d clips after processing", len(planned))
+        logger.info("SmartTrailerAgent: %d clips ready (%.1fs total)",
+                    len(planned), sum(c.end_time - c.start_time for c in planned))
 
         clips = [
             TrailerClip(
@@ -463,7 +549,12 @@ class SmartTrailerAgent:
             platform, clip_score, len(plan.clips), output_path,
         )
 
-        ok, err = compose(planned, raw_footage_path, output_path, raw_transcript, plan.audio_fade_out)
+        ok, err = compose(
+            planned, raw_footage_path, output_path, raw_transcript,
+            plan.audio_fade_out,
+            job_id=job_id,
+            beats=raw_beats.get("beats", []),
+        )
         if not ok:
             return None, plan, analysis, err, platform, clip_score, False, None
 

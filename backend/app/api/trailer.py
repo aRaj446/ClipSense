@@ -137,6 +137,41 @@ def cancel_trailer_job(job_id: str, db: Session = Depends(get_db)):
     return _serialise(job)
 
 
+# ── GET /trailer-job/{job_id}/progress (SSE) ─────────────────────────────────
+
+@router.get("/trailer-job/{job_id}/progress")
+def trailer_job_progress(job_id: str):
+    """
+    Server-Sent Events stream for render progress.
+    Emits: data: {"stage": str, "percent": int, "message": str}
+    Closes automatically when stage == "done" or "failed".
+    """
+    import asyncio
+    import time
+    from fastapi.responses import StreamingResponse
+    from app.utils.render_progress import get_progress
+
+    def _stream():
+        for _ in range(300):   # max 5 minutes at 1s intervals
+            entry = get_progress(job_id)
+            if entry:
+                payload = json.dumps({
+                    "stage":   entry["stage"],
+                    "percent": entry["percent"],
+                    "message": entry["message"],
+                    "steps":   entry.get("steps", []),
+                })
+                yield f"data: {payload}\n\n"
+                if entry["stage"] in ("done", "failed"):
+                    break
+            else:
+                yield f"data: {{\"stage\": \"pending\", \"percent\": 0, \"message\": \"Waiting to start\", \"steps\": []}}\n\n"
+            time.sleep(1)
+
+    return StreamingResponse(_stream(), media_type="text/event-stream",
+                             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
+
 # ── GET /all-trailers ─────────────────────────────────────────────────────────
 
 @router.get("/all-trailers", response_model=list[TrailerJobResponse])
@@ -171,58 +206,74 @@ def _run_job(
         job.updated_at = datetime.now(timezone.utc)
         db.commit()
 
-        segments = [
-            FeedbackSegment(
-                timestamp=seg.timestamp,
-                topic=seg.topic,
-                sentiment=seg.sentiment,
-                summary=seg.summary,
-                confidence=seg.confidence,
-            )
-            for seg in dataset_segments
+        from app.utils.job_queue import job_slot
+        from app.utils.render_progress import set_progress, init_steps
+        _STEPS = [
+            {"key": "scenes",     "label": "Detecting scenes",       "status": "pending", "percent": 0},
+            {"key": "transcript", "label": "Transcribing audio",      "status": "pending", "percent": 0},
+            {"key": "beats",      "label": "Analysing beat rhythm",   "status": "pending", "percent": 0},
+            {"key": "planning",   "label": "Planning clip selection", "status": "pending", "percent": 0},
+            {"key": "extracting", "label": "Extracting clips",        "status": "pending", "percent": 0},
+            {"key": "composing",  "label": "Composing transitions",   "status": "pending", "percent": 0},
+            {"key": "normalising","label": "Normalising audio",       "status": "pending", "percent": 0},
         ]
+        set_progress(job_id, "queued", 0, "Waiting for previous job to finish…", steps=_STEPS)
+        with job_slot():
+            segments = [
+                FeedbackSegment(
+                    timestamp=seg.timestamp,
+                    topic=seg.topic,
+                    sentiment=seg.sentiment,
+                    summary=seg.summary,
+                    confidence=seg.confidence,
+                )
+                for seg in dataset_segments
+            ]
 
-        analytics: AnalyticsReport = _analytics_agent.analyze(segments)
+            analytics: AnalyticsReport = _analytics_agent.analyze(segments)
 
-        # Run VideoOptimizationAgent — its recommendations inform clip scoring
-        # by injecting high-priority positive timestamps back into the analytics
-        # timeline so VideoRegenerationAgent weights them higher.
-        recommendations, _ = _optim_agent.analyze(
-            segments=segments,
-            video_metadata=project,
-        )
+            # Run VideoOptimizationAgent — its recommendations inform clip scoring
+            # by injecting high-priority positive timestamps back into the analytics
+            # timeline so VideoRegenerationAgent weights them higher.
+            recommendations, _ = _optim_agent.analyze(
+                segments=segments,
+                video_metadata=project,
+            )
 
-        # Promote high-priority positive timestamps into the analytics timeline
-        # so the clip planner treats them as anchor points
-        from app.schemas.feedback import TimelinePoint
-        boosted = set()
-        for rec in recommendations:
-            if rec.priority == "High" and rec.timestamp:
-                boosted.add(rec.timestamp)
-        if boosted:
-            existing_ts = {p.timestamp for p in analytics.timeline}
+            # Promote high-priority positive timestamps into the analytics timeline
+            # so the clip planner treats them as anchor points
+            from app.schemas.feedback import TimelinePoint
+            boosted = set()
             for rec in recommendations:
-                if rec.timestamp and rec.timestamp not in existing_ts:
-                    analytics.timeline.append(TimelinePoint(
-                        timestamp=rec.timestamp,
-                        topic=rec.action.split()[0] if rec.action else "General",
-                        sentiment="Positive",
-                        summary=rec.reason,
-                        confidence=0.85,
-                    ))
-            logger.info("trailer: injected %d optimization timestamps into analytics", len(boosted))
+                if rec.priority == "High" and rec.timestamp:
+                    boosted.add(rec.timestamp)
+            if boosted:
+                existing_ts = {p.timestamp for p in analytics.timeline}
+                for rec in recommendations:
+                    if rec.timestamp and rec.timestamp not in existing_ts:
+                        analytics.timeline.append(TimelinePoint(
+                            timestamp=rec.timestamp,
+                            topic=rec.action.split()[0] if rec.action else "General",
+                            sentiment="Positive",
+                            summary=rec.reason,
+                            confidence=0.85,
+                        ))
+                logger.info("trailer: injected %d optimization timestamps into analytics", len(boosted))
 
-        video_duration = float(project.get("duration") or 0.0)
-        output_path, plan, error, platform, clip_score, gemini_used, fallback_warning = _regen_agent.generate(
-            project_id=project["id"],
-            analytics=analytics,
-            video_duration=video_duration,
-            target_duration=target_duration,
-        )
+            video_duration = float(project.get("duration") or 0.0)
+            output_path, plan, error, platform, clip_score, gemini_used, fallback_warning = _regen_agent.generate(
+                project_id=project["id"],
+                analytics=analytics,
+                video_duration=video_duration,
+                target_duration=target_duration,
+                job_id=job_id,
+            )
 
         if error or not output_path:
             job.status        = "failed"
             job.error_message = error or "Unknown error"
+            from app.utils.render_progress import set_progress
+            set_progress(job_id, "failed", 100, job.error_message)
         else:
             job.status           = "done"
             job.output_path      = output_path

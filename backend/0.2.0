@@ -1,0 +1,48 @@
+Collecting transformers
+  Downloading transformers-5.14.1-py3-none-any.whl.metadata (32 kB)
+Collecting sentencepiece
+  Using cached sentencepiece-0.2.2-cp313-cp313-win_amd64.whl.metadata (34 kB)
+Collecting huggingface-hub<2.0,>=1.5.0 (from transformers)
+  Downloading huggingface_hub-1.24.0-py3-none-any.whl.metadata (16 kB)
+Requirement already satisfied: numpy>=1.17 in .\venv\Lib\site-packages (from transformers) (2.4.6)
+Requirement already satisfied: packaging>=20.0 in .\venv\Lib\site-packages (from transformers) (26.2)
+Requirement already satisfied: pyyaml>=5.1 in .\venv\Lib\site-packages (from transformers) (6.0.3)
+Requirement already satisfied: regex>=2025.10.22 in .\venv\Lib\site-packages (from transformers) (2026.7.10)
+Collecting tokenizers<=0.23.0,>=0.22.0 (from transformers)
+  Downloading tokenizers-0.22.2-cp39-abi3-win_amd64.whl.metadata (7.4 kB)
+Requirement already satisfied: typer in .\venv\Lib\site-packages (from transformers) (0.26.8)
+Collecting safetensors>=0.8.0 (from transformers)
+  Downloading safetensors-0.8.0-cp310-abi3-win_amd64.whl.metadata (4.2 kB)
+Requirement already satisfied: tqdm>=4.60 in .\venv\Lib\site-packages (from transformers) (4.68.3)
+Requirement already satisfied: click<9.0.0,>=8.4.2 in .\venv\Lib\site-packages (from huggingface-hub<2.0,>=1.5.0->transformers) (8.4.2)
+Requirement already satisfied: filelock>=3.10.0 in .\venv\Lib\site-packages (from huggingface-hub<2.0,>=1.5.0->transformers) (3.30.0)
+Requirement already satisfied: fsspec>=2023.5.0 in .\venv\Lib\site-packages (from huggingface-hub<2.0,>=1.5.0->transformers) (2026.6.0)
+Collecting hf-xet<2.0.0,>=1.5.1 (from huggingface-hub<2.0,>=1.5.0->transformers)
+  Downloading hf_xet-1.5.2-cp38-abi3-win_amd64.whl.metadata (4.9 kB)
+Requirement already satisfied: httpx<1,>=0.23.0 in .\venv\Lib\site-packages (from huggingface-hub<2.0,>=1.5.0->transformers) (0.28.1)
+Requirement already satisfied: typing-extensions>=4.1.0 in .\venv\Lib\site-packages (from huggingface-hub<2.0,>=1.5.0->transformers) (4.16.0)
+Requirement already satisfied: colorama in .\venv\Lib\site-packages (from click<9.0.0,>=8.4.2->huggingface-hub<2.0,>=1.5.0->transformers) (0.4.6)
+Requirement already satisfied: anyio in .\venv\Lib\site-packages (from httpx<1,>=0.23.0->huggingface-hub<2.0,>=1.5.0->transformers) (4.14.1)
+Requirement already satisfied: certifi in .\venv\Lib\site-packages (from httpx<1,>=0.23.0->huggingface-hub<2.0,>=1.5.0->transformers) (2026.6.17)
+Requirement already satisfied: httpcore==1.* in .\venv\Lib\site-packages (from httpx<1,>=0.23.0->huggingface-hub<2.0,>=1.5.0->transformers) (1.0.9)
+Requirement already satisfied: idna in .\venv\Lib\site-packages (from httpx<1,>=0.23.0->huggingface-hub<2.0,>=1.5.0->transformers) (3.18)
+Requirement already satisfied: h11>=0.16 in .\venv\Lib\site-packages (from httpcore==1.*->httpx<1,>=0.23.0->huggingface-hub<2.0,>=1.5.0->transformers) (0.16.0)
+Requirement already satisfied: shellingham>=1.3.0 in .\venv\Lib\site-packages (from typer->transformers) (1.5.4)
+Requirement already satisfied: rich>=13.8.0 in .\venv\Lib\site-packages (from typer->transformers) (15.0.0)
+Requirement already satisfied: annotated-doc>=0.0.2 in .\venv\Lib\site-packages (from typer->transformers) (0.0.4)
+Requirement already satisfied: markdown-it-py>=2.2.0 in .\venv\Lib\site-packages (from rich>=13.8.0->typer->transformers) (4.2.0)
+Requirement already satisfied: pygments<3.0.0,>=2.13.0 in .\venv\Lib\site-packages (from rich>=13.8.0->typer->transformers) (2.20.0)
+Requirement already satisfied: mdurl~=0.1 in .\venv\Lib\site-packages (from markdown-it-py>=2.2.0->rich>=13.8.0->typer->transformers) (0.1.2)
+Downloading transformers-5.14.1-py3-none-any.whl (11.6 MB)
+   ---------------------------------------- 11.6/11.6 MB 21.7 MB/s  0:00:00
+Downloading huggingface_hub-1.24.0-py3-none-any.whl (771 kB)
+   ---------------------------------------- 771.9/771.9 kB 19.2 MB/s  0:00:00
+Downloading hf_xet-1.5.2-cp38-abi3-win_amd64.whl (4.0 MB)
+   ---------------------------------------- 4.0/4.0 MB 19.1 MB/s  0:00:00
+Downloading tokenizers-0.22.2-cp39-abi3-win_amd64.whl (2.7 MB)
+   ---------------------------------------- 2.7/2.7 MB 7.1 MB/s  0:00:00
+Using cached sentencepiece-0.2.2-cp313-cp313-win_amd64.whl (1.2 MB)
+Downloading safetensors-0.8.0-cp310-abi3-win_amd64.whl (355 kB)
+Installing collected packages: sentencepiece, safetensors, hf-xet, huggingface-hub, tokenizers, transformers
+
+Successfully installed hf-xet-1.5.2 huggingface-hub-1.24.0 safetensors-0.8.0 sentencepiece-0.2.2 tokenizers-0.22.2 transformers-5.14.1

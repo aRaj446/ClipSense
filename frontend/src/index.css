@@ -50,3 +50,8 @@
     @apply w-1.5 h-1.5 rounded-full inline-block;
   }
 }
+
+@keyframes shimmer-bar {
+  0%   { background-position: 200% center; }
+  100% { background-position: -200% center; }
+}

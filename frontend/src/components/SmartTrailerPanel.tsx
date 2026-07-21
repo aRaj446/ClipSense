@@ -1,9 +1,10 @@
 import { useState, useEffect, useRef } from 'react'
-import { Loader2, CheckCircle, XCircle, RefreshCw, Square, Trash2, Sparkles, MessageSquare } from 'lucide-react'
+import { Loader2, CheckCircle, XCircle, RefreshCw, Square, Trash2, Sparkles, MessageSquare, Play } from 'lucide-react'
 import { SmartTrailerJob } from '../types/analysis'
 import { smartTrailerService } from '../services/smartTrailerService'
 import { useToast } from '../context/ToastContext'
 import Card from './Card'
+import JobProgressPanel, { ProgressStep } from './JobProgressPanel'
 
 const POLL_INTERVAL_MS = 3000
 
@@ -111,7 +112,9 @@ export default function SmartTrailerPanel({ onSelectJob }: { onSelectJob?: (id: 
   const [jobs,        setJobs]        = useState<SmartTrailerJob[]>([])
   const [loadingJobs, setLoadingJobs] = useState(true)
   const [activeJobId, setActiveJobId] = useState<string | null>(null)
-  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  const [progress,    setProgress]    = useState<{ stage: string; percent: number; message: string; steps: ProgressStep[] } | null>(null)
+  const pollRef    = useRef<ReturnType<typeof setInterval> | null>(null)
+  const sseUnsubRef = useRef<(() => void) | null>(null)
 
   useEffect(() => {
     smartTrailerService.listJobs()
@@ -124,21 +127,41 @@ export default function SmartTrailerPanel({ onSelectJob }: { onSelectJob?: (id: 
       .finally(() => setLoadingJobs(false))
   }, [])
 
+  const PENDING_STEPS: ProgressStep[] = [
+    { key: 'comments',   label: 'Parsing audience comments', status: 'pending', percent: 0 },
+    { key: 'sample',     label: 'Analysing sample trailer',  status: 'pending', percent: 0 },
+    { key: 'scenes',     label: 'Detecting scenes',          status: 'pending', percent: 0 },
+    { key: 'transcript', label: 'Transcribing audio',        status: 'pending', percent: 0 },
+    { key: 'beats',      label: 'Analysing beat rhythm',     status: 'pending', percent: 0 },
+    { key: 'planning',   label: 'Planning clip selection',   status: 'pending', percent: 0 },
+    { key: 'extracting', label: 'Extracting clips',          status: 'pending', percent: 0 },
+    { key: 'composing',  label: 'Composing transitions',     status: 'pending', percent: 0 },
+    { key: 'normalising',label: 'Normalising audio',         status: 'pending', percent: 0 },
+  ]
+
   useEffect(() => {
     if (!activeJobId) return
+    // Seed with pending steps immediately so UI doesn't appear frozen before first SSE tick
+    setProgress({ stage: 'queued', percent: 0, message: 'Starting…', steps: PENDING_STEPS })
+    sseUnsubRef.current = smartTrailerService.subscribeProgress(
+      activeJobId,
+      (stage, percent, message, steps) => setProgress({ stage, percent, message, steps: steps.length ? steps : PENDING_STEPS }),
+    )
     pollRef.current = setInterval(async () => {
       try {
         const job = await smartTrailerService.pollJob(activeJobId)
         setJobs(prev => prev.map(j => j.id === job.id ? job : j))
         if (job.status === 'done' || job.status === 'failed') {
           clearInterval(pollRef.current!)
+          sseUnsubRef.current?.()
           setActiveJobId(null)
+          setProgress(null)
           if (job.status === 'done') toast('Smart trailer generated successfully!')
           else toast(job.error_message ?? 'Smart trailer generation failed.', 'error')
         }
       } catch { /* retry next tick */ }
     }, POLL_INTERVAL_MS)
-    return () => clearInterval(pollRef.current!)
+    return () => { clearInterval(pollRef.current!); sseUnsubRef.current?.() }
   }, [activeJobId])
 
   async function handleCancel() {
@@ -200,20 +223,20 @@ export default function SmartTrailerPanel({ onSelectJob }: { onSelectJob?: (id: 
 
       {/* Active job banner */}
       {activeJob && (activeJob.status === 'pending' || activeJob.status === 'processing') && (
-        <div className="flex items-center gap-3 rounded-xl px-4 py-3"
-          style={{ background: '#D4A84309', border: '1px solid #D4A84320', borderLeft: '3px solid #D4A843' }}>
-          <Loader2 size={16} className="animate-spin shrink-0" style={{ color: '#D4A843' }} />
-          <div className="flex-1 min-w-0">
-            <p className="text-sm font-medium" style={{ color: '#F0EDE8' }}>{STATUS_LABEL[activeJob.status]}</p>
-            <p className="text-xs mt-0.5" style={{ color: '#5C5A72' }}>
-              Analysing sample trailer, classifying mood groups, composing with crossfades…
-            </p>
+        <div className="space-y-3">
+          <JobProgressPanel
+            stage={progress?.stage ?? 'pending'}
+            percent={progress?.percent ?? 0}
+            message={progress?.message ?? 'Analysing sample trailer, classifying mood groups, composing with crossfades…'}
+            steps={progress?.steps ?? []}
+          />
+          <div className="flex justify-end">
+            <button onClick={handleCancel}
+              className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg border transition-colors"
+              style={{ borderColor: '#F8717130', color: '#F87171', background: '#F8717108' }}>
+              <Square size={11} /> Stop generation
+            </button>
           </div>
-          <button onClick={handleCancel}
-            className="flex items-center gap-1 text-xs px-2.5 py-1.5 rounded-lg border transition-colors shrink-0"
-            style={{ borderColor: '#F8717130', color: '#F87171' }}>
-            <Square size={11} /> Stop
-          </button>
         </div>
       )}
 
@@ -276,6 +299,25 @@ export default function SmartTrailerPanel({ onSelectJob }: { onSelectJob?: (id: 
             {job.editing_plan && job.editing_plan.clips.length > 0 && (
               <div className="px-4 pb-3" style={{ background: 'linear-gradient(145deg, #13131F, #1A1A2E)' }}>
                 <ClipTimeline clips={job.editing_plan.clips} totalDuration={job.editing_plan.target_duration} />
+              </div>
+            )}
+
+            {job.status === 'done' && job.output_url && (
+              <div style={{ borderTop: '1px solid #252538', background: '#0C0C14' }}>
+                <video controls className="w-full max-h-64 object-contain bg-black"
+                  src={smartTrailerService.trailerUrl(job.output_url)} />
+                <div className="px-4 py-2 flex items-center gap-3">
+                  <a href={smartTrailerService.trailerUrl(job.output_url)} download
+                    className="flex items-center gap-1.5 text-xs transition-opacity hover:opacity-70"
+                    style={{ color: '#D4A843' }}>
+                    <Play size={12} /> Download trailer
+                  </a>
+                  {job.clip_score != null && (
+                    <span className="text-xs ml-auto" style={{ color: '#5C5A72' }}>
+                      Score: <span className="font-medium" style={{ color: '#FCD34D' }}>{Math.round((job.clip_score ?? 0) * 100)}%</span>
+                    </span>
+                  )}
+                </div>
               </div>
             )}
           </div>

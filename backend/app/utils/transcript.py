@@ -7,8 +7,7 @@ Runs OpenAI Whisper on a video file to produce:
 
 The segments are used by the trailer agents to:
   1. Detect speech boundaries so FFmpeg clip edges never cut mid-sentence.
-  2. Pass spoken content context to Gemini so it can make content-aware
-     clip selections (e.g. prefer clips containing key product phrases).
+  2. Identify content-rich moments for clip selection scoring.
 
 Uses the "base" model by default — fast enough for server use and accurate
 enough for boundary detection. Falls back to an empty result gracefully if
@@ -21,7 +20,8 @@ import os
 logger = logging.getLogger(__name__)
 
 # Model size: "tiny" | "base" | "small" | "medium" | "large"
-# "base" is the best tradeoff between speed and accuracy for boundary detection.
+# "small" gives noticeably better transcript accuracy than "base" (~2x slower
+# but still fast enough for server use). Override via WHISPER_MODEL env var.
 _WHISPER_MODEL = os.getenv("WHISPER_MODEL", "base")
 
 # Cache the loaded model across calls within the same process lifetime

@@ -148,6 +148,40 @@ def generate_smart_trailer(
     return _serialise(job)
 
 
+# ── GET /smart-trailer/job/{job_id}/progress (SSE) ───────────────────────────
+
+@router.get("/job/{job_id}/progress")
+def smart_trailer_job_progress(job_id: str):
+    """
+    Server-Sent Events stream for smart trailer render progress.
+    Emits: data: {"stage": str, "percent": int, "message": str}
+    """
+    import time
+    import json
+    from fastapi.responses import StreamingResponse
+    from app.utils.render_progress import get_progress
+
+    def _stream():
+        for i in range(600):   # max 10 minutes
+            entry = get_progress(job_id)
+            if entry:
+                payload = json.dumps({
+                    "stage":   entry["stage"],
+                    "percent": entry["percent"],
+                    "message": entry["message"],
+                    "steps":   entry.get("steps", []),
+                })
+                yield f"data: {payload}\n\n"
+                if entry["stage"] in ("done", "failed"):
+                    break
+            else:
+                yield 'data: {"stage": "pending", "percent": 0, "message": "Waiting to start", "steps": []}\n\n'
+            time.sleep(0.5 if i < 10 else 1)
+
+    return StreamingResponse(_stream(), media_type="text/event-stream",
+                             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
+
 # ── GET /smart-trailer/job/{job_id}/analytics ─────────────────────────────────
 # Registered before /job/{job_id} so FastAPI doesn't treat "analytics" as a job_id
 
@@ -259,18 +293,35 @@ def _run_smart_job(job_id: str) -> None:
         db.commit()
         logger.info("SmartTrailer: job %s started", job_id)
 
-        agent = SmartTrailerAgent()
-        output_path, plan, analysis, error, platform, clip_score, _, fallback_warning = agent.generate(
-            raw_footage_path=job.raw_footage_path,
-            sample_trailer_path=job.sample_trailer_path,
-            comments_path=job.comments_path,
-            job_id=job_id,
-        )
+        from app.utils.job_queue import job_slot
+        from app.utils.render_progress import set_progress, init_steps
+        _STEPS = [
+            {"key": "comments",    "label": "Parsing audience comments",  "status": "pending", "percent": 0},
+            {"key": "sample",      "label": "Analysing sample trailer",    "status": "pending", "percent": 0},
+            {"key": "scenes",      "label": "Detecting scenes",            "status": "pending", "percent": 0},
+            {"key": "transcript",  "label": "Transcribing audio",          "status": "pending", "percent": 0},
+            {"key": "beats",       "label": "Analysing beat rhythm",       "status": "pending", "percent": 0},
+            {"key": "planning",    "label": "Planning clip selection",     "status": "pending", "percent": 0},
+            {"key": "extracting",  "label": "Extracting clips",            "status": "pending", "percent": 0},
+            {"key": "composing",   "label": "Composing transitions",       "status": "pending", "percent": 0},
+            {"key": "normalising", "label": "Normalising audio",           "status": "pending", "percent": 0},
+        ]
+        set_progress(job_id, "queued", 0, "Waiting for previous job to finish…", steps=_STEPS)
+        with job_slot():
+            agent = SmartTrailerAgent()
+            output_path, plan, analysis, error, platform, clip_score, _, fallback_warning = agent.generate(
+                raw_footage_path=job.raw_footage_path,
+                sample_trailer_path=job.sample_trailer_path,
+                comments_path=job.comments_path,
+                job_id=job_id,
+            )
 
         if error or not output_path:
             job.status        = "failed"
             job.error_message = error or "Unknown error"
             logger.error("SmartTrailer: job %s failed — %s", job_id, job.error_message)
+            from app.utils.render_progress import set_progress
+            set_progress(job_id, "failed", 100, job.error_message)
         else:
             job.status           = "done"
             job.output_path      = output_path
@@ -297,6 +348,8 @@ def _run_smart_job(job_id: str) -> None:
                 job.error_message = tb[:2000]   # cap to avoid DB overflow
                 job.updated_at    = datetime.now(timezone.utc)
                 db.commit()
+                from app.utils.render_progress import set_progress
+                set_progress(job_id, "failed", 100, job.error_message[:200])
         except Exception:
             pass
     finally:

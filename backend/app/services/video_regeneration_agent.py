@@ -89,14 +89,14 @@ def _build_plans(
     analytics: AnalyticsReport,
     video_duration: float,
     shot_boundaries: list[dict],
+    beats: list[float],
 ) -> list[dict]:
     """
     Build one clip plan per platform using engagement-weighted scoring.
-
-    Uses engagement_score from TopicBreakdown (Stage 2 output) to weight
-    candidate clips. Higher engagement_score topics get priority.
-    Clips are snapped to real scene boundaries from PySceneDetect.
+    Candidate timestamps are snapped to the nearest strong beat so cuts
+    land on musical accents rather than arbitrary positions.
     """
+    from app.utils.beat_detector import find_nearest_beat
     # Build engagement weight per topic from Stage 2 engagement_score
     # engagement_score is already (positive - negative) / total in [-1.0, 1.0]
     # Multiply by avg_confidence to further weight high-certainty topics
@@ -135,6 +135,8 @@ def _build_plans(
             secs = _mm_ss_to_seconds(point.timestamp)
             if secs is None:
                 continue
+            # Snap candidate timestamp to nearest beat for musical cut alignment
+            secs = find_nearest_beat(secs, beats, tolerance=0.5)
             start, end = _snap_to_scene(secs, shot_boundaries, video_duration)
             clip_len = end - start
             # Enforce 6s minimum at planning stage too
@@ -197,7 +199,10 @@ class VideoRegenerationAgent:
         analytics: AnalyticsReport,
         video_duration: float,
         target_duration: float = 60.0,
+        job_id: str | None = None,
     ) -> tuple[str | None, TrailerEditingPlan | None, str | None, str | None, float | None, bool, str | None]:
+
+        _key = job_id or project_id  # use job_id for progress so SSE reads the right key
 
         input_path = self._find_video(project_id)
         if not input_path:
@@ -207,15 +212,35 @@ class VideoRegenerationAgent:
             video_duration = _infer_duration(analytics)
             logger.info("VideoRegenerationAgent: inferred duration %.1fs from timeline", video_duration)
 
+        # Initialise progress steps (only if not already set by the API layer)
+        from app.utils.render_progress import set_progress, init_steps, set_step, get_progress
+        _STEPS = [
+            {"key": "scenes",     "label": "Detecting scenes",       "status": "pending", "percent": 0},
+            {"key": "transcript", "label": "Transcribing audio",      "status": "pending", "percent": 0},
+            {"key": "beats",      "label": "Analysing beat rhythm",   "status": "pending", "percent": 0},
+            {"key": "planning",   "label": "Planning clip selection", "status": "pending", "percent": 0},
+            {"key": "extracting", "label": "Extracting clips",        "status": "pending", "percent": 0},
+            {"key": "composing",  "label": "Composing transitions",   "status": "pending", "percent": 0},
+            {"key": "normalising","label": "Normalising audio",       "status": "pending", "percent": 0},
+        ]
+        if not (get_progress(_key) or {}).get("steps"):
+            set_progress(_key, "preprocessing", 0, "Starting pipeline", steps=_STEPS)
+
         # Stage 1 — parallel pre-processing
+        set_step(_key, "scenes",     "active", 0, "Detecting shot boundaries…", overall_percent=2)
+        set_step(_key, "transcript", "active", 0, "Transcribing audio…")
+        set_step(_key, "beats",      "active", 0, "Analysing beat rhythm…")
         try:
             with ThreadPoolExecutor(max_workers=3) as pool:
                 fut_scenes     = pool.submit(detect_scenes, input_path)
                 fut_transcript = pool.submit(transcribe, input_path)
                 fut_beats      = pool.submit(detect_beats, input_path)
                 shot_boundaries = fut_scenes.result()
+                set_step(_key, "scenes", "done", 100, f"{len(shot_boundaries)} scenes detected", overall_percent=10)
                 transcript      = fut_transcript.result()
+                set_step(_key, "transcript", "done", 100, f"{len(transcript['segments'])} segments transcribed", overall_percent=20)
                 beat_data       = fut_beats.result()
+                set_step(_key, "beats", "done", 100, f"{beat_data['beat_count']} beats at {beat_data['tempo']:.0f} BPM", overall_percent=28)
         except Exception as exc:
             return None, None, f"Pre-processing failed: {exc}", None, None, False, None
 
@@ -225,7 +250,8 @@ class VideoRegenerationAgent:
         )
 
         # Stage 2 — deterministic clip planning
-        plans    = _build_plans(analytics, video_duration, shot_boundaries)
+        set_step(_key, "planning", "active", 0, "Scoring and selecting clips…", overall_percent=30)
+        plans    = _build_plans(analytics, video_duration, shot_boundaries, beat_data.get("beats", []))
         best_raw = _select_best_plan(plans)
 
         if not best_raw or not best_raw.get("clips"):
@@ -233,6 +259,7 @@ class VideoRegenerationAgent:
 
         platform   = best_raw["platform"]
         clip_score = best_raw["clip_score"]
+        set_step(_key, "planning", "done", 100, f"{len(best_raw['clips'])} clips selected for {platform}", overall_percent=35)
 
         logger.info(
             "VideoRegenerationAgent: best plan — platform=%s score=%.3f clips=%d",
@@ -280,7 +307,12 @@ class VideoRegenerationAgent:
             platform, clip_score, len(plan.clips), output_path,
         )
 
-        ok, err = compose(planned, input_path, output_path, transcript, plan.audio_fade_out)
+        ok, err = compose(
+            planned, input_path, output_path, transcript,
+            plan.audio_fade_out,
+            job_id=_key,
+            beats=beat_data.get("beats", []),
+        )
         if not ok:
             return None, plan, err, platform, clip_score, False, None
 

@@ -6,6 +6,7 @@ import { trailerService } from '../services/trailerService'
 import { useToast } from '../context/ToastContext'
 import Button from './Button'
 import Card from './Card'
+import JobProgressPanel, { ProgressStep } from './JobProgressPanel'
 
 const POLL_INTERVAL_MS = 3000
 
@@ -123,7 +124,9 @@ export default function TrailerPanel({ projectId, datasets }: Props) {
   const [loadingJobs, setLoadingJobs] = useState(true)
   const [generating, setGenerating]   = useState(false)
   const [activeJobId, setActiveJobId] = useState<string | null>(null)
+  const [progress, setProgress] = useState<{ stage: string; percent: number; message: string; steps: ProgressStep[] } | null>(null)
   const pollRef                       = useRef<ReturnType<typeof setInterval> | null>(null)
+  const sseUnsubRef                   = useRef<(() => void) | null>(null)
 
   useEffect(() => {
     trailerService.listJobs(projectId)
@@ -144,20 +147,27 @@ export default function TrailerPanel({ projectId, datasets }: Props) {
 
   useEffect(() => {
     if (!activeJobId) return
+    setProgress(null)
+    sseUnsubRef.current = trailerService.subscribeProgress(
+      activeJobId,
+      (stage, percent, message, steps) => setProgress({ stage, percent, message, steps }),
+    )
     pollRef.current = setInterval(async () => {
       try {
         const job = await trailerService.pollJob(activeJobId)
         setJobs(prev => prev.map(j => j.id === job.id ? job : j))
         if (job.status === 'done' || job.status === 'failed') {
           clearInterval(pollRef.current!)
+          sseUnsubRef.current?.()
           setActiveJobId(null)
           setGenerating(false)
+          setProgress(null)
           if (job.status === 'done') toast('Trailer generated successfully!')
           else toast(job.error_message ?? 'Trailer generation failed.', 'error')
         }
       } catch { /* retry next tick */ }
     }, POLL_INTERVAL_MS)
-    return () => clearInterval(pollRef.current!)
+    return () => { clearInterval(pollRef.current!); sseUnsubRef.current?.() }
   }, [activeJobId])
 
   async function handleGenerate() {
@@ -265,18 +275,20 @@ export default function TrailerPanel({ projectId, datasets }: Props) {
 
       {/* Active job banner */}
       {activeJob && (activeJob.status === 'pending' || activeJob.status === 'processing') && (
-        <div className="flex items-center gap-3 rounded-xl px-4 py-3"
-          style={{ background: '#D4A84309', border: '1px solid #D4A84320', borderLeft: '3px solid #D4A843' }}>
-          <Loader2 size={16} className="animate-spin shrink-0" style={{ color: '#D4A843' }} />
-          <div className="flex-1 min-w-0">
-            <p className="text-sm font-medium" style={{ color: '#F0EDE8' }}>{STATUS_LABEL[activeJob.status]}</p>
-            <p className="text-xs mt-0.5" style={{ color: '#5C5A72' }}>Analysing sentiment, classifying mood groups, composing with crossfades…</p>
+        <div className="space-y-3">
+          <JobProgressPanel
+            stage={progress?.stage ?? 'pending'}
+            percent={progress?.percent ?? 0}
+            message={progress?.message ?? 'Analysing sentiment, classifying mood groups, composing with crossfades…'}
+            steps={progress?.steps ?? []}
+          />
+          <div className="flex justify-end">
+            <button onClick={handleCancel}
+              className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg border transition-colors"
+              style={{ borderColor: '#F8717130', color: '#F87171', background: '#F8717108' }}>
+              <Square size={11} /> Stop generation
+            </button>
           </div>
-          <button onClick={handleCancel}
-            className="flex items-center gap-1 text-xs px-2.5 py-1.5 rounded-lg border transition-colors shrink-0"
-            style={{ borderColor: '#F8717130', color: '#F87171' }}>
-            <Square size={11} /> Stop
-          </button>
         </div>
       )}
 

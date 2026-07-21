@@ -136,8 +136,7 @@ export default function AudienceFeedbackPanel({ projectId, datasets, onDatasetsC
           Upload a feedback file for this video.{' '}
           <span className="text-slate-300 font-medium">.json</span> and{' '}
           <span className="text-slate-300 font-medium">.csv</span> use the structured parser.{' '}
-          <span className="text-slate-300 font-medium">.txt</span> is parsed by{' '}
-          <span className="text-primary font-medium">Gemini 2.5 Pro</span>.
+          <span className="text-slate-300 font-medium">.txt</span> is parsed automatically.
         </p>
 
         {/* Drop zone */}
@@ -171,9 +170,6 @@ export default function AudienceFeedbackPanel({ projectId, datasets, onDatasetsC
                 <p className="text-slate-100 text-sm font-medium truncate">{selected.file.name}</p>
                 <p className="text-slate-500 text-xs mt-0.5">
                   {formatFileSize(selected.file.size)} · {selected.ext.toUpperCase()}
-                  {selected.ext === '.txt' && (
-                    <span className="ml-2 text-primary font-medium">· Gemini 2.5 Pro</span>
-                  )}
                 </p>
               </div>
               <button onClick={clearSelection} disabled={uploading} className="text-slate-500 hover:text-slate-300 disabled:opacity-40 shrink-0">
@@ -184,7 +180,7 @@ export default function AudienceFeedbackPanel({ projectId, datasets, onDatasetsC
             {uploading && (
               <div className="space-y-1.5">
                 <div className="flex justify-between text-xs text-slate-400">
-                  <span>{selected.ext === '.txt' ? 'Analysing with Gemini…' : 'Uploading & analysing…'}</span>
+                  <span>Uploading & analysing…</span>
                   <span>{progress}%</span>
                 </div>
                 <ProgressBar percent={progress} />
@@ -228,8 +224,7 @@ export default function AudienceFeedbackPanel({ projectId, datasets, onDatasetsC
             </div>
             <div className="bg-surface rounded-lg p-3 border border-surface-border">
               <p className="text-xs font-semibold text-slate-400 mb-2 flex items-center gap-1.5">
-                <FileText size={12} className="text-primary" /> feedback.txt
-                <span className="ml-auto text-primary text-xs">Gemini</span>
+                <FileText size={12} /> feedback.txt
               </p>
               <pre className="text-xs text-slate-400 leading-relaxed overflow-x-auto">{`The intro at 0:30 felt too slow.\nLoved the product demo — very clear!\nBackground music was way too loud.`}</pre>
             </div>

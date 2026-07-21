@@ -1,13 +1,35 @@
 import subprocess
 import json
+import os
 from typing import Optional
 
 
+def _get_ffprobe() -> str:
+    """Resolve ffprobe from imageio_ffmpeg bundle, falling back to PATH."""
+    try:
+        import imageio_ffmpeg
+        ffmpeg_exe = imageio_ffmpeg.get_ffmpeg_exe()
+        # imageio_ffmpeg ships ffprobe alongside ffmpeg in the same directory
+        ffprobe_exe = os.path.join(os.path.dirname(ffmpeg_exe), "ffprobe")
+        if os.path.exists(ffprobe_exe):
+            return ffprobe_exe
+        # Windows — try with .exe extension
+        ffprobe_exe_win = ffprobe_exe + ".exe"
+        if os.path.exists(ffprobe_exe_win):
+            return ffprobe_exe_win
+    except Exception:
+        pass
+    return "ffprobe"
+
+
+_FFPROBE = _get_ffprobe()
+
+
 def extract_video_metadata(file_path: str) -> dict:
-    """Extract video metadata using ffprobe."""
+    """Extract video metadata using ffprobe from the imageio_ffmpeg bundle."""
     try:
         cmd = [
-            "ffprobe", "-v", "quiet",
+            _FFPROBE, "-v", "quiet",
             "-print_format", "json",
             "-show_streams", "-show_format",
             file_path,
@@ -28,11 +50,11 @@ def extract_video_metadata(file_path: str) -> dict:
 
         return {
             "duration": _safe_float(fmt.get("duration")),
-            "width": video_stream.get("width"),
-            "height": video_stream.get("height"),
-            "fps": _parse_fps(video_stream.get("r_frame_rate", "0/1")),
-            "codec": video_stream.get("codec_name"),
-            "bitrate": _safe_int(fmt.get("bit_rate")),
+            "width":    video_stream.get("width"),
+            "height":   video_stream.get("height"),
+            "fps":      _parse_fps(video_stream.get("r_frame_rate", "0/1")),
+            "codec":    video_stream.get("codec_name"),
+            "bitrate":  _safe_int(fmt.get("bit_rate")),
         }
     except Exception:
         return {}

@@ -33,7 +33,7 @@ def _extract_audio(video_path: str, audio_path: str) -> bool:
     """Extract mono 22050 Hz WAV from video for librosa."""
     cmd = [
         FFMPEG, "-y", "-i", video_path,
-        "-ac", "1", "-ar", "22050",
+        "-ac", "1", "-ar", "11025",
         "-vn", audio_path,
     ]
     try:
@@ -68,8 +68,8 @@ def detect_beats(video_path: str) -> dict:
         import librosa
         import numpy as np
 
-        y, sr = librosa.load(audio_path, sr=22050, mono=True)
-        tempo, beat_frames = librosa.beat.beat_track(y=y, sr=sr)
+        y, sr = librosa.load(audio_path, sr=11025, mono=True, res_type='kaiser_fast')
+        tempo, beat_frames = librosa.beat.beat_track(y=y, sr=sr, hop_length=256)
         beat_times = librosa.frames_to_time(beat_frames, sr=sr).tolist()
 
         # Scalar tempo (librosa may return array)

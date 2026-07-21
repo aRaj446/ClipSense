@@ -1,0 +1,4 @@
+  File "<string>", line 1
+    from app.utils.scene_detector import detect_scenes; scenes=detect_scenes('app/uploads/smart/1161591e-5cc7-4dbb-9ef3-7521ccad236d/c033e0e0d2d44f0789c691280d10447a_raw.mp4'); valid=[s for s in scenes if s['duration']; dur=max(s['end_time'] for s in scenes); print('scenes', len(scenes), 'valid', len(valid), 'dur', dur, 'target', max(30.0,min(120.0,round(dur*0.15))))
+                                                                                                                                                                                                                          ^
+SyntaxError: invalid syntax

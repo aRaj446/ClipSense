@@ -122,9 +122,14 @@ async def upload_feedback_file(
     )
 
     # ── Stage 3: Video Optimization Agent ────────────────────────────────────
+    # Run scene detection + transcription in parallel so the agent gets
+    # scene-anchored recommendations and speech-density analysis.
+    scene_boundaries, transcript = _get_video_context(project)
     recommendations, editing_plan = _optimization_agent.analyze(
         segments=segments,
         video_metadata=project,
+        scene_boundaries=scene_boundaries,
+        transcript=transcript,
     )
 
     positive = sum(1 for s in segments if s.sentiment in ("Positive", "Praise"))
@@ -172,9 +177,12 @@ def analyze_feedback(
         source="manual_paste",
     )
 
+    scene_boundaries, transcript = _get_video_context(project)
     recommendations, editing_plan = _optimization_agent.analyze(
         segments=segments,
         video_metadata=project,
+        scene_boundaries=scene_boundaries,
+        transcript=transcript,
     )
 
     positive = sum(1 for s in segments if s.sentiment in ("Positive", "Praise"))
@@ -339,6 +347,41 @@ def delete_dataset(dataset_id: str, db: Session = Depends(get_db)):
 
 
 # ── Private helpers ───────────────────────────────────────────────────────────
+
+def _get_video_context(project: dict) -> tuple[list, dict]:
+    """
+    Run scene detection and Whisper transcription in parallel for the project
+    video. Returns (scene_boundaries, transcript). Both default to empty
+    structures on failure so the caller never needs to handle None.
+    """
+    import os
+    from concurrent.futures import ThreadPoolExecutor
+    from app.utils.scene_detector import detect_scenes
+    from app.utils.transcript import transcribe
+    from app.utils.storage import UPLOAD_DIR
+
+    video_path = project.get("file_path", "")
+    if not video_path or not os.path.exists(video_path):
+        pid = project.get("id", "")
+        for ext in (".mp4", ".mov", ".avi", ".mkv", ".webm"):
+            candidate = os.path.join(UPLOAD_DIR, f"{pid}{ext}")
+            if os.path.exists(candidate):
+                video_path = candidate
+                break
+
+    if not video_path or not os.path.exists(video_path):
+        return [], {"segments": [], "words": [], "language": "", "full_text": ""}
+
+    try:
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            fut_scenes     = pool.submit(detect_scenes, video_path)
+            fut_transcript = pool.submit(transcribe, video_path)
+            return fut_scenes.result(), fut_transcript.result()
+    except Exception as exc:
+        import logging
+        logging.getLogger(__name__).warning("feedback: video context extraction failed: %s", exc)
+        return [], {"segments": [], "words": [], "language": "", "full_text": ""}
+
 
 def _parse_file(raw_text: str, ext: str) -> list[FeedbackSegment]:
     """

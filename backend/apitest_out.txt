@@ -1,4 +1,0 @@
-  File "c:\Users\7000039334\Documents\Gearshift\Clipsense\backend\apitest.py", line 23
-    break if label == 'PAID' else None
-          ^^
-SyntaxError: invalid syntax

@@ -35,11 +35,20 @@ async def lifespan(app: FastAPI):
     import threading
     def _prewarm():
         try:
-            from app.services.feedback_structuring_agent import _get_classifier
-            _get_classifier()
+            from app.services.feedback_structuring_agent import _get_sentiment_classifier
+            _get_sentiment_classifier()
         except Exception as exc:
             import logging
             logging.getLogger(__name__).warning("Model pre-warm failed: %s", exc)
+        try:
+            from app.services.project_service import ProjectService
+            removed = ProjectService().evict_smart_uploads(max_age_days=7)
+            if removed:
+                import logging
+                logging.getLogger(__name__).info("lifespan: evicted %d stale smart upload dir(s)", removed)
+        except Exception as exc:
+            import logging
+            logging.getLogger(__name__).warning("Smart upload eviction failed: %s", exc)
     threading.Thread(target=_prewarm, daemon=True, name="hf-prewarm").start()
     yield
 
