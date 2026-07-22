@@ -14,8 +14,8 @@ Pipeline:
         and sentiment-informed scoring. Enforces 6s minimum per clip.
 
     Stage 4 — Clip Processing + FFmpeg Composition
-        process_clips(): sentence-safe boundaries, 6s minimum, mood grouping.
-        compose(): colour grading, xfade transitions, audio ducking, loudnorm.
+        Converts plan dicts directly to PlannedClip, classifies mood, composes
+        with moviepy CrossFadeIn transitions, loudnorm, and video/audio fade-out.
 
 No external API calls. No Gemini. Fully deterministic and offline.
 """
@@ -40,7 +40,7 @@ from app.utils.storage import TRAILERS_DIR
 from app.utils.scene_detector import detect_scenes
 from app.utils.transcript import transcribe
 from app.utils.beat_detector import detect_beats
-from app.utils.clip_planner import process_clips
+from app.utils.clip_planner import classify_clips_by_mood
 from app.utils.ffmpeg_composer import compose
 
 logger = logging.getLogger(__name__)
@@ -260,11 +260,12 @@ def _plan_clips_from_raw(
         reverse=True,
     )
 
+    MAX_CLIPS = 7
     clips = []
     total = 0.0
     pos_topics_list = sorted(pos_topics)  # deterministic order
     for scene in scored:
-        if total >= target_duration:
+        if total >= target_duration or len(clips) >= MAX_CLIPS:
             break
 
         # Check for dialogue in this scene
@@ -494,7 +495,7 @@ class SmartTrailerAgent:
         # Do NOT run process_clips — the planner already selected, bounded, and
         # budgeted every clip. Re-running boundary expansion + overlap removal
         # on score-sorted (non-chronological) clips destroys most of them.
-        from app.utils.clip_planner import PlannedClip, classify_clips_by_mood, get_transcript_text
+        from app.utils.clip_planner import PlannedClip, get_transcript_text
         planned: list[PlannedClip] = [
             PlannedClip(
                 start_time=float(c["start_time"]),
@@ -511,8 +512,11 @@ class SmartTrailerAgent:
         ]
         # Sort chronologically so FFmpeg extracts in timeline order
         planned.sort(key=lambda c: c.start_time)
-        # Mood classification only — for xfade transition selection
+        # Mood classification only — for transition selection
         planned = classify_clips_by_mood(planned, raw_footage_path)
+        # Force last clip to action mood for energetic ending
+        if planned:
+            planned[-1].mood_group = "action"
 
         if not planned:
             return None, None, analysis, "No clips remained after processing.", platform, clip_score, False, None

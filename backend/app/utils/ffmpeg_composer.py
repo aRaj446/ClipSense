@@ -6,13 +6,12 @@ Shared video assembly layer used by both VideoRegenerationAgent and SmartTrailer
 Features:
     - Resolution/fps normalisation (1920x1080 @ 30fps, settb=1/30) before compositing
     - Colour grading across all clips (exposure/saturation normalisation)
-    - Silence-snapped clip boundaries (silencedetect) for natural cut points
-    - Per-clip loudnorm (-16 LUFS) so every clip enters xfade at matched loudness
-    - Mood-aware xfade transitions (wipeleft/dissolve/fade/hard-cut)
+    - Per-clip loudnorm (-16 LUFS) so every clip enters compositing at matched loudness
+    - moviepy CrossFadeIn transitions between clips
     - Beat-snapped clip boundaries when beats list provided
     - Scene-boundary music fade (volume dip before each cut for smooth transitions)
     - Two-pass loudnorm (-14 LUFS) on final output
-    - Audio fade-out on final clip
+    - Video + audio fade-out on final clip
     - Real-time SSE progress reporting
     - Failed clip extractions are skipped rather than aborting the whole job
 """
@@ -24,7 +23,7 @@ import logging
 import subprocess
 import tempfile
 
-from app.utils.clip_planner import PlannedClip, MIN_CLIP_DURATION, MIN_CLIP_DURATION_SPEECH
+from app.utils.clip_planner import PlannedClip, MIN_CLIP_DURATION
 from app.utils.render_progress import set_progress
 from app.utils.beat_detector import find_nearest_beat
 
@@ -55,29 +54,6 @@ _CLIP_VF = f"{_NORMALISE_FILTER},{_GRADE_FILTER},format=yuv420p"
 # Per-clip loudnorm — normalise each clip to -16 LUFS before compositing so no
 # clip enters a transition louder or quieter than its neighbours.
 _CLIP_LOUDNORM = "loudnorm=I=-16:LRA=11:TP=-1:linear=true"
-
-# Transition type per mood-pair (from_mood -> to_mood).
-# None = hard cut, only used for dialogue->dialogue to preserve speech flow.
-# All other transitions use at least a dissolve so short non-dialogue clips
-# blend smoothly rather than hard-cutting.
-_TRANSITION_MAP: dict[tuple[str, str], str | None] = {
-    ("action",    "action"):    "wipeleft",
-    ("action",    "emotional"): "fade",
-    ("action",    "dialogue"):  "fade",
-    ("action",    "calm"):      "dissolve",
-    ("emotional", "action"):    "fade",
-    ("emotional", "emotional"): "dissolve",
-    ("emotional", "dialogue"):  "dissolve",
-    ("emotional", "calm"):      "dissolve",
-    ("dialogue",  "action"):    "fade",
-    ("dialogue",  "emotional"): "dissolve",
-    ("dialogue",  "dialogue"):  None,
-    ("dialogue",  "calm"):      "dissolve",
-    ("calm",      "action"):    "fade",
-    ("calm",      "emotional"): "dissolve",
-    ("calm",      "dialogue"):  "dissolve",
-    ("calm",      "calm"):      "dissolve",
-}
 
 
 def _get_ffmpeg() -> str:
@@ -146,60 +122,6 @@ def _build_loudnorm_filter(measured_json: str) -> str:
         return base
 
 
-def _find_silence_boundaries(
-    input_path: str,
-    clip_start: float,
-    clip_end: float,
-    noise_floor: float = -35.0,
-    min_silence: float = 0.3,
-) -> tuple[float, float]:
-    """
-    Snap clip start/end to nearest silence gap within a 1.5s window.
-    Uses input-side -i first so silencedetect timestamps are file-absolute.
-    Falls back to original boundaries on any failure or if result is too short.
-    """
-    window = 1.5
-    try:
-        cmd = [
-            FFMPEG, "-y",
-            "-i", input_path,
-            "-ss", str(max(0.0, clip_start - 0.1)),
-            "-to", str(clip_end + 0.1),
-            "-af", f"silencedetect=noise={noise_floor}dB:d={min_silence}",
-            "-f", "null", "-",
-        ]
-        r = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
-        stderr = r.stderr
-
-        starts = [float(m) for m in re.findall(r"silence_start:\s*([\d.]+)", stderr)]
-        ends   = [float(m) for m in re.findall(r"silence_end:\s*([\d.]+)", stderr)]
-
-        adj_start = clip_start
-        adj_end   = clip_end
-
-        # timestamps from output-side seek are file-absolute — compare directly
-        for se in ends:
-            if clip_start <= se <= clip_start + window:
-                adj_start = se
-                break
-
-        for ss in reversed(starts):
-            if clip_end - window <= ss <= clip_end:
-                adj_end = ss
-                break
-
-        if adj_end - adj_start < MIN_CLIP_DURATION_SPEECH:
-            return clip_start, clip_end
-
-        return round(adj_start, 3), round(adj_end, 3)
-
-    except Exception as exc:
-        logger.debug(
-            "silencedetect: failed for %.1f-%.1f (%s) — using original boundaries",
-            clip_start, clip_end, exc,
-        )
-        return clip_start, clip_end
-
 
 def _build_scene_boundary_fade(clip_durations: list[float], fade_secs: float = 0.8) -> str:
     """
@@ -267,7 +189,6 @@ def compose(
     try:
         # ── Step 1: Extract, normalise, grade, and loudnorm each clip ────────
         clip_paths: list[str] = []
-        accepted_clips: list[PlannedClip] = []
         n_clips = len(clips)
 
         for i, clip in enumerate(clips):
@@ -301,37 +222,69 @@ def compose(
                 )
                 continue
             clip_paths.append(out)
-            accepted_clips.append(clip)
 
         if not clip_paths:
             return False, "All clip extractions failed - no clips to compose."
 
         _step("extracting", "done", 100, f"{len(clip_paths)} clips extracted", overall=75)
 
-        # ── Step 2: Concat all clips with dissolve transitions ─────────────
+        # ── Step 2: Stitch clips with moviepy crossfade transitions ──────────
         if len(clip_paths) == 1:
             _progress("composing", 50, "Single clip — skipping transitions")
             _step("composing", "done", 100, "Single clip — no transitions needed", overall=80)
             concat_out = clip_paths[0]
         else:
-            _progress("composing", 50, f"Stitching {len(clip_paths)} clips")
+            _progress("composing", 50, f"Stitching {len(clip_paths)} clips with transitions")
             _step("composing", "active", 0, f"Stitching {len(clip_paths)} clips", overall=76)
 
-            concat_out  = os.path.join(tmp_dir, "concat_out.mp4")
-            concat_file = os.path.join(tmp_dir, "concat.txt")
-            with open(concat_file, "w") as f:
-                for p in clip_paths:
-                    f.write(f"file '{p}'\n")
+            concat_out = os.path.join(tmp_dir, "concat_out.mp4")
 
-            ok, err = _run([
-                FFMPEG, "-y",
-                "-f", "concat", "-safe", "0",
-                "-i", concat_file,
-                "-c", "copy",
-                concat_out,
-            ], timeout=600)
-            if not ok:
-                return False, f"Concat failed: {err}"
+            mv_clips: list = []
+            composite = None
+            try:
+                from moviepy import VideoFileClip, CompositeVideoClip
+                from moviepy.video.fx import CrossFadeIn
+
+                mv_clips = [VideoFileClip(p) for p in clip_paths]
+
+                # Place each clip on the timeline overlapping by CROSSFADE_DURATION.
+                # CrossFadeIn dissolves the incoming clip over the overlap window.
+                timeline_pos = 0.0
+                positioned = []
+                for idx, mvc in enumerate(mv_clips):
+                    if idx == 0:
+                        positioned.append(mvc.with_start(0))
+                        timeline_pos = mvc.duration
+                    else:
+                        start = timeline_pos - CROSSFADE_DURATION
+                        positioned.append(
+                            mvc.with_effects([CrossFadeIn(CROSSFADE_DURATION)])
+                               .with_start(start)
+                        )
+                        timeline_pos = start + mvc.duration
+
+                composite = CompositeVideoClip(positioned)
+                composite.write_videofile(
+                    concat_out,
+                    codec="libx264",
+                    audio_codec="aac",
+                    fps=30,
+                    preset="fast",
+                    logger=None,
+                )
+            except Exception as exc:
+                return False, f"Transition stitching failed: {exc}"
+            finally:
+                for mvc in mv_clips:
+                    try:
+                        mvc.close()
+                    except Exception:
+                        pass
+                if composite is not None:
+                    try:
+                        composite.close()
+                    except Exception:
+                        pass
 
         _step("composing", "done", 100, "Transitions applied", overall=82)
 
@@ -340,14 +293,15 @@ def compose(
         _step("normalising", "active", 0, "Running two-pass loudnorm…", overall=83)
         duration = _probe_duration(concat_out)
         fade_filter = ""
+        vfade_filter = ""
         if audio_fade_out and duration > 0:
-            fade_start  = max(0.0, duration - 2.0)
-            fade_filter = f"afade=t=out:st={fade_start:.2f}:d=2,"
+            fade_start    = max(0.0, duration - 2.0)
+            fade_filter   = f"afade=t=out:st={fade_start:.2f}:d=2,"
+            vfade_filter  = f"fade=t=out:st={fade_start:.2f}:d=2,"
 
         # Build scene-boundary music fade envelope from actual clip durations
-        accepted_durations = [_probe_duration(p) for p in clip_paths]
-        timeline_durations: list[float] = list(accepted_durations)
-        boundary_fade   = _build_scene_boundary_fade(timeline_durations)
+        clip_durations_for_fade = [_probe_duration(p) for p in clip_paths]
+        boundary_fade = _build_scene_boundary_fade(clip_durations_for_fade)
         boundary_filter = f"{boundary_fade}," if boundary_fade else ""
 
         measured   = _loudnorm_pass1(concat_out)
@@ -356,7 +310,7 @@ def compose(
 
         ok, err = _run([
             FFMPEG, "-y", "-i", concat_out,
-            "-vf", "format=yuv420p",
+            "-vf", f"{vfade_filter}format=yuv420p",
             "-c:v", "libx264", "-crf", "18", "-preset", "fast",
             "-profile:v", "high", "-level", "4.1",
             "-af", audio_filt,

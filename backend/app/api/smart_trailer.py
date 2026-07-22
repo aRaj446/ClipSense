@@ -135,11 +135,14 @@ def generate_smart_trailer(
     job = db.query(SmartTrailerJob).filter(SmartTrailerJob.id == job_id).first()
     if not job:
         raise HTTPException(404, "Job not found")
-    if job.status not in ("pending", "failed"):
+    if job.status not in ("pending", "failed", "done"):
         raise HTTPException(400, f"Job is already {job.status}")
 
     job.status        = "pending"
     job.error_message = None
+    job.output_path   = None
+    job.editing_plan  = None
+    job.analysis_report = None
     job.updated_at    = datetime.now(timezone.utc)
     db.commit()
 

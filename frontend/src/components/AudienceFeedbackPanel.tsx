@@ -288,13 +288,14 @@ export default function AudienceFeedbackPanel({ projectId, datasets, onDatasetsC
                         <div key={seg.id} className="flex items-start gap-3 px-4 py-2.5 text-xs">
                           <span className="text-slate-600 w-10 shrink-0">{seg.timestamp ?? '—'}</span>
                           <span className="text-slate-400 w-24 shrink-0 truncate">{seg.topic}</span>
-                          <span className={`shrink-0 px-1.5 py-0.5 rounded text-xs font-medium ${
-                            seg.sentiment === 'Positive' || seg.sentiment === 'Praise'
-                              ? 'bg-green-500/15 text-green-400'
-                              : seg.sentiment === 'Negative' || seg.sentiment === 'Complaint'
-                              ? 'bg-red-500/15 text-red-400'
-                              : 'bg-slate-500/15 text-slate-400'
-                          }`}>{seg.sentiment}</span>
+                          <span className="shrink-0 px-1.5 py-0.5 rounded text-xs font-medium" style={{
+                            background: seg.sentiment === 'Positive' || seg.sentiment === 'Praise'
+                              ? '#D4A84318' : seg.sentiment === 'Negative' || seg.sentiment === 'Complaint'
+                              ? '#F8717118' : '#8B7CF618',
+                            color: seg.sentiment === 'Positive' || seg.sentiment === 'Praise'
+                              ? '#D4A843' : seg.sentiment === 'Negative' || seg.sentiment === 'Complaint'
+                              ? '#F87171' : '#8B7CF6',
+                          }}>{seg.sentiment}</span>
                           <span className="text-slate-400 flex-1">{seg.summary}</span>
                           <span className="text-slate-600 shrink-0">{Math.round(seg.confidence * 100)}%</span>
                         </div>
@@ -361,13 +362,14 @@ export default function AudienceFeedbackPanel({ projectId, datasets, onDatasetsC
                       <div key={seg.id} className="flex items-start gap-3 px-4 py-2.5 text-xs">
                         <span className="text-slate-600 w-10 shrink-0">{seg.timestamp ?? '—'}</span>
                         <span className="text-slate-400 w-24 shrink-0 truncate">{seg.topic}</span>
-                        <span className={`shrink-0 px-1.5 py-0.5 rounded text-xs font-medium ${
-                          seg.sentiment === 'Positive' || seg.sentiment === 'Praise'
-                            ? 'bg-green-500/15 text-green-400'
-                            : seg.sentiment === 'Negative' || seg.sentiment === 'Complaint'
-                            ? 'bg-red-500/15 text-red-400'
-                            : 'bg-slate-500/15 text-slate-400'
-                        }`}>{seg.sentiment}</span>
+                        <span className="shrink-0 px-1.5 py-0.5 rounded text-xs font-medium" style={{
+                          background: seg.sentiment === 'Positive' || seg.sentiment === 'Praise'
+                            ? '#D4A84318' : seg.sentiment === 'Negative' || seg.sentiment === 'Complaint'
+                            ? '#F8717118' : '#8B7CF618',
+                          color: seg.sentiment === 'Positive' || seg.sentiment === 'Praise'
+                            ? '#D4A843' : seg.sentiment === 'Negative' || seg.sentiment === 'Complaint'
+                            ? '#F87171' : '#8B7CF6',
+                        }}>{seg.sentiment}</span>
                         <span className="text-slate-400 flex-1">{seg.summary}</span>
                         <span className="text-slate-600 shrink-0">{Math.round(seg.confidence * 100)}%</span>
                       </div>

@@ -149,28 +149,6 @@ def _extract_clip_energy(
     return float(np.mean(rms))
 
 
-def classify_mood(energy: float, energy_max: float, transcript_text: str) -> str:
-    """
-    Classify a clip's mood group based on normalised energy [0,1] and transcript.
-    Thresholds are adaptive (set by KMeans caller); this function uses pre-computed
-    centroid boundaries passed as energy_max=boundary tuple when called from
-    classify_clips_by_mood, or falls back to fixed ratios for standalone use.
-    """
-    if energy_max <= 0:
-        return "calm"
-
-    ratio = energy / energy_max
-    has_speech = bool(transcript_text.strip())
-
-    if ratio > 0.70:
-        return "action"
-    if ratio > 0.40:
-        return "emotional" if has_speech else "action"
-    if ratio > 0.15:
-        return "dialogue" if has_speech else "calm"
-    return "calm"
-
-
 def _kmeans_thresholds(energies: list[float]) -> tuple[float, float, float]:
     """
     Fit KMeans (k=4) on clip energies and return the three boundary values
