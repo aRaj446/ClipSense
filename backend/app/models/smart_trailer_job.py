@@ -40,6 +40,14 @@ class SmartTrailerJob(Base):
     gemini_used         = Column(String,   nullable=True)       # 'true'|'false'
     fallback_warning    = Column(Text,     nullable=True)       # disclaimer when fallback was used
     error_message       = Column(Text,     nullable=True)
+    # Duration of the raw footage in seconds — stored at generation time so the
+    # time-saved calculation can use the actual input length, not the output length.
+    raw_footage_duration_secs = Column(Float, nullable=True)
+    fast_mode           = Column(String,   nullable=True)   # 'true'|'false' — set at generation time
+    # GPU/device metadata — recorded at generation time for analytics/debug
+    device_used         = Column(String,   nullable=True)   # 'cuda'|'cpu'
+    encoder_used        = Column(String,   nullable=True)   # 'h264_nvenc'|'libx264'
+    whisper_model_used  = Column(String,   nullable=True)   # e.g. 'base', 'small'
     created_at          = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
     updated_at          = Column(DateTime, default=lambda: datetime.now(timezone.utc),
                                  onupdate=lambda: datetime.now(timezone.utc), nullable=False)

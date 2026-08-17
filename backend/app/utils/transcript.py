@@ -9,31 +9,59 @@ The segments are used by the trailer agents to:
   1. Detect speech boundaries so FFmpeg clip edges never cut mid-sentence.
   2. Identify content-rich moments for clip selection scoring.
 
-Uses the "base" model by default — fast enough for server use and accurate
-enough for boundary detection. Falls back to an empty result gracefully if
-Whisper or torch is unavailable.
+Device selection is controlled by the DEVICE and USE_GPU environment variables
+(see app/utils/device.py). The model name is controlled by WHISPER_MODEL.
+
+Model caching:
+    The loaded Whisper model is cached per (model_name, device) pair within
+    the worker process. This avoids reloading the model for every job while
+    remaining safe if the device or model name changes between calls (e.g.
+    during testing). The cache is process-scoped — each worker process has
+    its own cache, which is correct for both local and EC2 deployments.
 """
 
 import logging
 import os
+import threading
 
 logger = logging.getLogger(__name__)
 
-# Model size: "tiny" | "base" | "small" | "medium" | "large"
-# "small" gives noticeably better transcript accuracy than "base" (~2x slower
-# but still fast enough for server use). Override via WHISPER_MODEL env var.
-_WHISPER_MODEL = os.getenv("WHISPER_MODEL", "base")
-
-# Cache the loaded model across calls within the same process lifetime
+# Thread-safe model cache: (model_name, device) → whisper model instance
+# Keyed by both model name and device so a test that patches DEVICE does not
+# accidentally reuse a model loaded on a different device.
 _model_cache: dict = {}
+_model_cache_lock = threading.Lock()
 
 
 def _get_model():
-    if _WHISPER_MODEL not in _model_cache:
-        import whisper
-        logger.info("transcript: loading Whisper model '%s'", _WHISPER_MODEL)
-        _model_cache[_WHISPER_MODEL] = whisper.load_model(_WHISPER_MODEL)
-    return _model_cache[_WHISPER_MODEL]
+    """
+    Load and cache the Whisper model for the currently configured device.
+
+    Thread-safe: uses a lock so concurrent jobs in the same process do not
+    trigger duplicate model loads. The first caller loads the model; all
+    subsequent callers receive the cached instance.
+
+    Device and model name are resolved fresh on each call so that changes to
+    environment variables (e.g. in tests) are respected without restarting.
+    """
+    from app.utils.device import resolve_device, whisper_model_name
+    model_name = whisper_model_name()
+    device = resolve_device()
+    cache_key = (model_name, device)
+
+    with _model_cache_lock:
+        if cache_key not in _model_cache:
+            import whisper
+            logger.info(
+                "transcript: loading Whisper model '%s' on device '%s'",
+                model_name, device,
+            )
+            _model_cache[cache_key] = whisper.load_model(model_name, device=device)
+            logger.info(
+                "transcript: model '%s' loaded on '%s'",
+                model_name, device,
+            )
+        return _model_cache[cache_key]
 
 
 def transcribe(video_path: str) -> dict:

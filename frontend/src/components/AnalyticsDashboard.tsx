@@ -104,13 +104,32 @@ export default function AnalyticsDashboard({ datasetId, datasetName, prefetchedR
   }
 
   // ── Prepare chart data ────────────────────────────────────────────────────
+  const safeReport = {
+    ...report,
+    total_segments:     report.total_segments      ?? 0,
+    analyzed_at:        report.analyzed_at         ?? new Date().toISOString(),
+    sentiment_distribution: report.sentiment_distribution ?? {},
+    timeline:           report.timeline            ?? [],
+    sentiment_velocity: report.sentiment_velocity  ?? [],
+    top_issues:         report.top_issues          ?? [],
+    top_positives:      report.top_positives       ?? [],
+    topic_breakdown:    report.topic_breakdown     ?? [],
+    confidence_stats: {
+      mean:                   report.confidence_stats?.mean                   ?? 0,
+      min:                    report.confidence_stats?.min                    ?? 0,
+      max:                    report.confidence_stats?.max                    ?? 0,
+      high_confidence_count:  report.confidence_stats?.high_confidence_count  ?? 0,
+      low_confidence_count:   report.confidence_stats?.low_confidence_count   ?? 0,
+      unanchored_count:       report.confidence_stats?.unanchored_count       ?? 0,
+    },
+  }
 
-  const sentimentPieData = Object.entries(report.sentiment_distribution)
+  const sentimentPieData = Object.entries(safeReport.sentiment_distribution ?? {})
     .filter(([, v]) => v > 0)
     .map(([name, value]) => ({ name, value }))
 
   // Topic bar sorted by engagement_score (already sorted from backend)
-  const topicBarData = report.topic_breakdown.slice(0, 8).map(t => ({
+  const topicBarData = safeReport.topic_breakdown.slice(0, 8).map(t => ({
     topic:    truncate(t.topic),
     Positive: t.positive,
     Negative: t.negative,
@@ -119,17 +138,17 @@ export default function AnalyticsDashboard({ datasetId, datasetName, prefetchedR
   }))
 
   const issueVsPositiveData = [
-    ...report.top_positives.map(t => ({ topic: truncate(t.topic, 18), count: t.count, type: 'Positive', conf: Math.round(t.avg_confidence * 100) })),
-    ...report.top_issues.map(t =>    ({ topic: truncate(t.topic, 18), count: t.count, type: 'Negative', conf: Math.round(t.avg_confidence * 100) })),
+    ...safeReport.top_positives.map(t => ({ topic: truncate(t.topic, 18), count: t.count, type: 'Positive', conf: Math.round(t.avg_confidence * 100) })),
+    ...safeReport.top_issues.map(t =>    ({ topic: truncate(t.topic, 18), count: t.count, type: 'Negative', conf: Math.round(t.avg_confidence * 100) })),
   ]
 
   const confidenceBarData = [
-    { label: 'High ≥80%', count: report.confidence_stats.high_confidence_count, fill: '#4ADE80' },
-    { label: 'Medium',    count: report.total_segments - report.confidence_stats.high_confidence_count - report.confidence_stats.low_confidence_count, fill: '#FCD34D' },
-    { label: 'Low <60%',  count: report.confidence_stats.low_confidence_count, fill: '#F87171' },
+    { label: 'High ≥80%', count: safeReport.confidence_stats.high_confidence_count, fill: '#4ADE80' },
+    { label: 'Medium',    count: safeReport.total_segments - safeReport.confidence_stats.high_confidence_count - safeReport.confidence_stats.low_confidence_count, fill: '#FCD34D' },
+    { label: 'Low <60%',  count: safeReport.confidence_stats.low_confidence_count, fill: '#F87171' },
   ]
 
-  const timelineScatterData = report.timeline
+  const timelineScatterData = safeReport.timeline
     .filter(t => t.timestamp)
     .map(t => {
       const parts = (t.timestamp ?? '0:0').split(':').map(Number)
@@ -139,7 +158,7 @@ export default function AnalyticsDashboard({ datasetId, datasetName, prefetchedR
       return { x, y: Math.round(t.confidence * 100), sentiment: t.sentiment, topic: t.topic, summary: t.summary }
     })
 
-  const velocityData = report.sentiment_velocity.map(b => ({
+  const velocityData = safeReport.sentiment_velocity.map(b => ({
     minute: `${b.minute}:00`,
     Positive: b.positive,
     Negative: b.negative,
@@ -157,17 +176,17 @@ export default function AnalyticsDashboard({ datasetId, datasetName, prefetchedR
           {datasetName && <span className="ml-2 font-normal text-sm" style={{ color: '#5C5A72' }}>— {datasetName}</span>}
         </h2>
         <div className="ml-auto flex items-center gap-3 flex-wrap">
-          {report.confidence_stats.unanchored_count > 0 && (
+          {safeReport.confidence_stats.unanchored_count > 0 && (
             <span
               className="flex items-center gap-1 text-xs px-2 py-0.5 rounded-full border"
               style={{ color: '#FCD34D', background: '#FCD34D12', borderColor: '#FCD34D28' }}
             >
               <Clock size={10} />
-              {report.confidence_stats.unanchored_count} without timestamp
+              {safeReport.confidence_stats.unanchored_count} without timestamp
             </span>
           )}
           <span className="text-xs" style={{ color: '#5C5A72' }}>
-            {report.total_segments} segments · {new Date(report.analyzed_at).toLocaleString()}
+            {safeReport.total_segments} segments · {new Date(safeReport.analyzed_at).toLocaleString()}
           </span>
         </div>
       </div>
@@ -175,10 +194,10 @@ export default function AnalyticsDashboard({ datasetId, datasetName, prefetchedR
       {/* ── Stat pills ─────────────────────────────────────────────────────── */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
         {[
-          { label: 'Total Segments',  value: report.total_segments,                                color: '#D4A843', bg: 'linear-gradient(135deg,#D4A84320,#D4A84308)' },
-          { label: 'Avg Confidence',  value: `${Math.round(report.confidence_stats.mean * 100)}%`, color: '#8B7CF6', bg: 'linear-gradient(135deg,#8B7CF620,#8B7CF608)' },
-          { label: 'High Confidence', value: report.confidence_stats.high_confidence_count,        color: '#4ADE80', bg: 'linear-gradient(135deg,#4ADE8020,#4ADE8008)' },
-          { label: 'Topics Covered',  value: report.topic_breakdown.length,                        color: '#2DD4BF', bg: 'linear-gradient(135deg,#2DD4BF20,#2DD4BF08)' },
+          { label: 'Total Segments',  value: safeReport.total_segments,                                color: '#D4A843', bg: 'linear-gradient(135deg,#D4A84320,#D4A84308)' },
+          { label: 'Avg Confidence',  value: `${Math.round(safeReport.confidence_stats.mean * 100)}%`, color: '#8B7CF6', bg: 'linear-gradient(135deg,#8B7CF620,#8B7CF608)' },
+          { label: 'High Confidence', value: safeReport.confidence_stats.high_confidence_count,        color: '#4ADE80', bg: 'linear-gradient(135deg,#4ADE8020,#4ADE8008)' },
+          { label: 'Topics Covered',  value: safeReport.topic_breakdown.length,                        color: '#2DD4BF', bg: 'linear-gradient(135deg,#2DD4BF20,#2DD4BF08)' },
         ].map(s => (
           <div
             key={s.label}
@@ -320,9 +339,9 @@ export default function AnalyticsDashboard({ datasetId, datasetName, prefetchedR
             </BarChart>
           </ResponsiveContainer>
           <div className="mt-3 grid grid-cols-3 gap-2 text-center">
-            <div><p className="text-xs" style={{ color: '#5C5A72' }}>Min</p><p className="text-sm font-semibold" style={{ color: '#F0EDE8' }}>{Math.round(report.confidence_stats.min * 100)}%</p></div>
-            <div><p className="text-xs" style={{ color: '#5C5A72' }}>Mean</p><p className="text-sm font-semibold" style={{ color: '#FCD34D' }}>{Math.round(report.confidence_stats.mean * 100)}%</p></div>
-            <div><p className="text-xs" style={{ color: '#5C5A72' }}>Max</p><p className="text-sm font-semibold" style={{ color: '#F0EDE8' }}>{Math.round(report.confidence_stats.max * 100)}%</p></div>
+            <div><p className="text-xs" style={{ color: '#5C5A72' }}>Min</p><p className="text-sm font-semibold" style={{ color: '#F0EDE8' }}>{Math.round(safeReport.confidence_stats.min * 100)}%</p></div>
+            <div><p className="text-xs" style={{ color: '#5C5A72' }}>Mean</p><p className="text-sm font-semibold" style={{ color: '#FCD34D' }}>{Math.round(safeReport.confidence_stats.mean * 100)}%</p></div>
+            <div><p className="text-xs" style={{ color: '#5C5A72' }}>Max</p><p className="text-sm font-semibold" style={{ color: '#F0EDE8' }}>{Math.round(safeReport.confidence_stats.max * 100)}%</p></div>
           </div>
         </Card>
       </div>
@@ -383,7 +402,7 @@ export default function AnalyticsDashboard({ datasetId, datasetName, prefetchedR
       <Card>
         <SectionTitle icon={<TrendingUp size={14} />} title="Topic Engagement Scores" />
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-8 gap-y-3">
-          {report.topic_breakdown.map(t => (
+          {safeReport.topic_breakdown.map(t => (
             <div key={t.topic}>
               <div className="flex items-center justify-between">
                 <span className="text-sm" style={{ color: '#F0EDE8' }}>{t.topic}</span>
@@ -398,8 +417,8 @@ export default function AnalyticsDashboard({ datasetId, datasetName, prefetchedR
       {/* ── Row 6: Top Issues & Positives detail ───────────────────────────── */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
         {[
-          { title: 'Top Positives', items: report.top_positives, color: '#4ADE80', bg: 'linear-gradient(135deg,#4ADE8010,#4ADE8006)', border: '#4ADE8020' },
-          { title: 'Top Issues',    items: report.top_issues,    color: '#F87171', bg: 'linear-gradient(135deg,#F8717110,#F8717106)', border: '#F8717120' },
+          { title: 'Top Positives', items: safeReport.top_positives, color: '#4ADE80', bg: 'linear-gradient(135deg,#4ADE8010,#4ADE8006)', border: '#4ADE8020' },
+          { title: 'Top Issues',    items: safeReport.top_issues,    color: '#F87171', bg: 'linear-gradient(135deg,#F8717110,#F8717106)', border: '#F8717120' },
         ].map(({ title, items, color, bg, border }) => (
           <Card key={title}>
             <SectionTitle icon={<BarChart2 size={14} />} title={title} />

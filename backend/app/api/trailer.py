@@ -280,7 +280,6 @@ def _run_job(
             job.editing_plan     = plan.model_dump_json() if plan else None
             job.platform         = platform
             job.clip_score       = clip_score
-            job.gemini_used      = str(gemini_used).lower()
             job.fallback_warning = fallback_warning
 
         job.updated_at = datetime.now(timezone.utc)
@@ -327,7 +326,6 @@ def _serialise(job: TrailerJob) -> TrailerJobResponse:
         editing_plan=editing_plan,
         platform=job.platform,
         clip_score=job.clip_score,
-        gemini_used=job.gemini_used == "true" if job.gemini_used is not None else None,
         fallback_warning=job.fallback_warning,
         error_message=job.error_message,
         created_at=job.created_at.isoformat(),

@@ -2,11 +2,13 @@
 Feedback Analysis API
 
 Endpoints:
-    POST /upload-feedback     — upload a structured feedback file (.json or .csv)
-    POST /analyze-feedback    — submit raw feedback text (kept for future LLM use)
+    POST /upload-feedback              — upload a structured feedback file (.json or .csv)
+    POST /analyze-feedback             — submit raw feedback text (kept for future LLM use)
     GET  /feedback-datasets/{project_id}
     GET  /feedback-dataset/{dataset_id}
     DELETE /feedback-dataset/{dataset_id}
+    GET  /export-dataset/{dataset_id}  — export as .xlsx
+    GET  /export-dataset/{dataset_id}/csv — export as Sensecap-compatible CSV
 
 Pipeline order for file upload:
     1. Parse structured file   — extract FeedbackSegment list from JSON or CSV
@@ -17,6 +19,7 @@ Pipeline order for file upload:
 import json
 import csv
 import io
+import re
 from fastapi import APIRouter, HTTPException, Depends, UploadFile, File, Form
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
@@ -37,6 +40,13 @@ from app.services.analytics_agent import AnalyticsAgent
 from app.services.feedback_dataset_service import FeedbackDatasetService
 from app.services.project_service import ProjectService
 from app.db.database import get_db
+from app.utils.sensecap_export import (
+    SENSECAP_CS_COLUMNS,
+    normalise_sentiment_label  as _normalise_sentiment_label,
+    sentiment_score            as _sentiment_score,
+    safe_filename              as _safe_filename,
+    build_sensecap_csv,
+)
 
 router = APIRouter()
 
@@ -259,6 +269,55 @@ def get_analytics(dataset_id: str, db: Session = Depends(get_db)):
     report = _analytics_agent.analyze(segments)
     _dataset_service.set_analytics_cache(db, dataset_id, report.model_dump_json())
     return report
+
+
+@router.get("/export-dataset/{dataset_id}/csv")
+def export_dataset_csv(dataset_id: str, db: Session = Depends(get_db)):
+    """
+    Export a persisted ClipSense feedback dataset as a Sensecap-compatible CSV.
+
+    The CSV uses SENSECAP_CS_COLUMNS as its canonical schema (defined in
+    app/utils/sensecap_export.py). Only fields that ClipSense genuinely
+    possesses are included. Geography, engagement, and ROI columns are
+    intentionally absent so that Sensecap renders honest "unavailable" states
+    rather than fabricated zeros.
+
+    Security posture:
+    - No authentication exists in this application; this endpoint inherits
+      that posture. Dataset IDs are UUIDs — enumeration is impractical.
+    - The filename is sanitized before use in Content-Disposition.
+    - Text fields are written via csv.DictWriter which handles quoting,
+      commas, newlines, and Unicode correctly.
+    - CSV injection: fields beginning with =, +, -, @ are not prefixed with
+      a tab because this CSV is consumed by Pandas (not opened in Excel by
+      end users directly). The risk is documented and accepted.
+
+    Performance:
+    - Datasets are loaded fully into memory. Acceptable for the current POC
+      where datasets are small (typically < 10 000 segments). For large
+      production datasets, replace build_sensecap_csv with a streaming
+      generator and return a StreamingResponse with a generator body.
+    """
+    ds = _dataset_service.get_dataset_by_id(db, dataset_id)
+    if not ds:
+        raise HTTPException(status_code=404, detail="Dataset not found")
+
+    if not ds.segments:
+        raise HTTPException(
+            status_code=422,
+            detail="Dataset exists but contains no segments and cannot be exported.",
+        )
+
+    dataset_label = ds.name or ""
+    csv_bytes = build_sensecap_csv(ds.segments, dataset_label)
+    safe_name = _safe_filename(dataset_label, dataset_id[:8])
+    filename  = f"sensecap_{safe_name}.csv"
+
+    return StreamingResponse(
+        io.BytesIO(csv_bytes),
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 
 
 @router.get("/export-dataset/{dataset_id}")

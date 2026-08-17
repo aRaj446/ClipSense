@@ -148,6 +148,52 @@ export interface SmartTrailerAnalysis {
   scene_selection_rationale: { clip_index: number; confidence: number; reason: string }[]
 }
 
+// ── Audio settings ───────────────────────────────────────────────────────────────
+
+export type TargetLufs = -16 | -14 | -12 | -10
+
+export interface AudioSettings {
+  target_lufs: TargetLufs
+  bass_boost: boolean
+  treble_cut: boolean
+}
+
+export const DEFAULT_AUDIO_SETTINGS: AudioSettings = {
+  target_lufs: -14,
+  bass_boost: false,
+  treble_cut: false,
+}
+
+export interface GenerateRequest {
+  user_prompt?: string
+  audio?: AudioSettings
+  include_subtitles?: boolean
+  fast_mode?: boolean
+}
+
+// ── Time saved ───────────────────────────────────────────────────────────────
+
+export interface TimeSavedBreakdown {
+  manual_editing_hours: number        // estimated hours a human editor would spend
+  processing_hours: number            // actual ClipSense wall-clock time in hours
+  estimated_time_saved_hours: number  // max(manual - processing, 0)
+  raw_footage_duration_secs: number   // source value used for manual estimate
+}
+
+// ── Pipeline ─────────────────────────────────────────────────────────────────
+
+export type PipelineStepStatus = 'completed' | 'active' | 'pending' | 'skipped'
+
+export interface PipelineStep {
+  id: string
+  title: string
+  description: string
+  status: PipelineStepStatus
+  icon: string          // lucide icon name — resolved in component
+  timestamp?: string    // ISO string, only set when genuinely available
+  action?: () => void   // navigation callback, only set when a real route exists
+}
+
 export interface SmartTrailerJob {
   id: string
   raw_footage_name: string
@@ -155,6 +201,9 @@ export interface SmartTrailerJob {
   comments_name: string
   status: 'pending' | 'processing' | 'done' | 'failed'
   output_url: string | null
+  sample_trailer_url: string | null   // URL to the original sample trailer for V1 vs V2
+  raw_footage_duration_secs: number | null  // actual raw footage length in seconds
+  fast_mode: boolean | null           // true when job was run in fast demo mode
   editing_plan: {
     clips: {
       start_time: number

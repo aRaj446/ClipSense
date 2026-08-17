@@ -25,6 +25,12 @@ import logging
 logger = logging.getLogger(__name__)
 
 _semaphore = threading.Semaphore(1)
+# IMPORTANT — thread-safety contract:
+# Whisper model inference (transcript.py) is NOT thread-safe when sharing one
+# model instance across concurrent calls. The semaphore=1 here serialises all
+# jobs so only one Whisper call runs at a time within this process.
+# If this value is ever raised above 1, transcript.py must be updated to use
+# a per-call model instance or a thread-safe inference queue.
 
 
 class job_slot:

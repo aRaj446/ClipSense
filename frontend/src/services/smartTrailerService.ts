@@ -1,4 +1,4 @@
-import { SmartTrailerJob } from '../types/analysis'
+import { SmartTrailerJob, TimeSavedBreakdown, GenerateRequest } from '../types/analysis'
 import { AnalyticsReport } from '../types/analysis'
 import apiClient from './apiClient'
 
@@ -22,8 +22,11 @@ export const smartTrailerService = {
     return data
   },
 
-  async generate(jobId: string): Promise<SmartTrailerJob> {
-    const { data } = await apiClient.post<SmartTrailerJob>(`/smart-trailer/generate/${jobId}`)
+  async generate(jobId: string, req: GenerateRequest = {}): Promise<SmartTrailerJob> {
+    const { data } = await apiClient.post<SmartTrailerJob>(
+      `/smart-trailer/generate/${jobId}`,
+      req,
+    )
     return data
   },
 
@@ -46,14 +49,30 @@ export const smartTrailerService = {
     return data
   },
 
+  async getTimeSaved(jobId: string): Promise<TimeSavedBreakdown> {
+    const { data } = await apiClient.get<TimeSavedBreakdown>(`/smart-trailer/job/${jobId}/time-saved`)
+    return data
+  },
+
   async getAnalytics(jobId: string): Promise<AnalyticsReport> {
     const { data } = await apiClient.get<AnalyticsReport>(`/smart-trailer/job/${jobId}/analytics`)
     return data
   },
 
+  exportCsvUrl(jobId: string): string {
+    const base = import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:8000'
+    return `${base}/smart-trailer/job/${jobId}/export-csv`
+  },
+
   trailerUrl(outputUrl: string): string {
     const base = import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:8000'
     return `${base}${outputUrl}`
+  },
+
+  // Resolve any backend-relative URL (output_url, sample_trailer_url, etc.)
+  resolveUrl(relativeUrl: string): string {
+    const base = import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:8000'
+    return `${base}${relativeUrl}`
   },
 
   subscribeProgress(

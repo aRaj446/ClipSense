@@ -51,6 +51,20 @@ export const feedbackService = {
     return `${base}/export-dataset/${datasetId}`
   },
 
+  exportDatasetCsvUrl(datasetId: string): string {
+    const base = import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:8000'
+    return `${base}/export-dataset/${datasetId}/csv`
+  },
+
+  sensecapDeepLink(datasetId: string, datasetName?: string): string {
+    const sensecap = import.meta.env.VITE_SENSECAP_URL ?? 'http://localhost:8501'
+    const base = import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:8000'
+    const csvUrl = `${base}/export-dataset/${datasetId}/csv`
+    const params = new URLSearchParams({ dataset_url: csvUrl, source: 'clipsense' })
+    if (datasetName) params.set('dataset_name', datasetName)
+    return `${sensecap}?${params.toString()}`
+  },
+
   /**
    * Submit raw unstructured feedback text.
    * Kept for future Gemini 2.5 Pro LLM integration.

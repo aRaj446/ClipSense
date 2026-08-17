@@ -71,7 +71,7 @@ export default function MainLayout() {
               color: '#D4A843',
             }}
           >
-            AI
+            Studio
           </span>
         </div>
 

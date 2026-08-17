@@ -2,7 +2,7 @@ import { useEffect, useState, useMemo } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import {
   BarChart2, ChevronRight, ChevronDown, Film, Database,
-  Loader2, Sparkles, Clapperboard, MessageSquare,
+  Loader2, Clapperboard, ExternalLink,
 } from 'lucide-react'
 import { Project } from '../types/project'
 import { StoredDataset, SmartTrailerJob } from '../types/analysis'
@@ -28,7 +28,6 @@ export default function AnalyticsPage() {
 
   const [sidebarMode, setSidebarMode]           = useState<'standard' | 'smart'>('standard')
   const [smartJobs, setSmartJobs]               = useState<SmartTrailerJob[]>([])
-  const [expandedSmartJob, setExpandedSmartJob] = useState<string | null>(null)
   const [selectedSmartJob, setSelectedSmartJob] = useState<SmartTrailerJob | null>(null)
 
   const qProject = searchParams.get('project')
@@ -111,7 +110,7 @@ export default function AnalyticsPage() {
               sidebarMode === 'smart' ? 'bg-surface text-slate-100 shadow-sm' : 'text-slate-500 hover:text-slate-300'
             }`}
           >
-            <Sparkles size={11} /> Smart
+            <Clapperboard size={11} /> Smart
           </button>
         </div>
 
@@ -172,50 +171,39 @@ export default function AnalyticsPage() {
           )
         )}
 
-        {/* Smart: generated trailer → comments dataset tree */}
+        {/* Smart: flat list — one click selects the job's comments dataset */}
         {sidebarMode === 'smart' && (
           smartJobs.length === 0 ? (
             <Card className="py-10 text-center">
-              <Sparkles size={32} className="text-slate-600 mx-auto mb-3" />
+              <Clapperboard size={32} className="text-slate-600 mx-auto mb-3" />
               <p className="text-slate-500 text-sm">No smart trailers yet.</p>
             </Card>
           ) : (
             smartJobs.map(job => {
-              const isExpanded = expandedSmartJob === job.id
-              const isDatasetSelected = selectedSmartJob?.id === job.id
+              const isSelected = selectedSmartJob?.id === job.id
               return (
-                <div key={job.id} className="rounded-lg border border-surface-border overflow-hidden">
-                  {/* Trailer row — same style as project row */}
-                  <button
-                    onClick={() => setExpandedSmartJob(isExpanded ? null : job.id)}
-                    className="w-full flex items-center gap-2 px-3 py-2.5 bg-surface hover:bg-surface-card transition-colors text-left"
-                  >
-                    {isExpanded
-                      ? <ChevronDown size={13} className="text-slate-400 shrink-0" />
-                      : <ChevronRight size={13} className="text-slate-400 shrink-0" />
-                    }
-                    <Sparkles size={13} className="text-primary shrink-0" />
-                    <span className="text-slate-200 text-xs font-medium truncate flex-1">{job.raw_footage_name}</span>
-                    {job.clip_score != null && (
-                      <span className="text-[10px] text-yellow-400 font-mono shrink-0">{Math.round(job.clip_score * 100)}%</span>
-                    )}
-                  </button>
-                  {/* Dataset child row — same style as dataset rows */}
-                  {isExpanded && (
-                    <div className="border-t border-surface-border bg-surface/50">
-                      <button
-                        onClick={() => setSelectedSmartJob(job)}
-                        className={`w-full flex items-center gap-2 px-4 py-2 text-left transition-colors ${
-                          isDatasetSelected ? 'bg-primary/10 text-primary' : 'text-slate-400 hover:bg-surface-card hover:text-slate-200'
-                        }`}
-                      >
-                        <MessageSquare size={11} className="shrink-0" />
-                        <span className="text-xs truncate flex-1">{job.comments_name}</span>
-                        <span className="text-xs opacity-60 shrink-0">{job.editing_plan?.clips.length ?? 0} clips</span>
-                      </button>
-                    </div>
+                <button
+                  key={job.id}
+                  onClick={() => setSelectedSmartJob(job)}
+                  className={`w-full flex items-center gap-2 px-3 py-2.5 rounded-lg border transition-colors text-left ${
+                    isSelected
+                      ? 'bg-primary/10 border-primary/30 text-primary'
+                      : 'bg-surface border-surface-border text-slate-400 hover:bg-surface-card hover:text-slate-200'
+                  }`}
+                >
+                  <Clapperboard size={13} className={isSelected ? 'text-primary shrink-0' : 'text-slate-500 shrink-0'} />
+                  <div className="flex-1 min-w-0">
+                    <p className={`text-xs font-medium truncate ${isSelected ? 'text-primary' : 'text-slate-200'}`}>
+                      {job.raw_footage_name}
+                    </p>
+                    <p className="text-[10px] truncate mt-0.5" style={{ color: isSelected ? '#D4A84399' : '#5C5A72' }}>
+                      {job.comments_name}
+                    </p>
+                  </div>
+                  {job.clip_score != null && (
+                    <span className="text-[10px] text-yellow-400 font-mono shrink-0">{Math.round(job.clip_score * 100)}%</span>
                   )}
-                </div>
+                </button>
               )
             })
           )
@@ -229,7 +217,7 @@ export default function AnalyticsPage() {
             <SmartAnalyticsDashboard job={selectedSmartJob} />
           ) : (
             <div className="flex flex-col items-center justify-center h-full text-center gap-4">
-              <Sparkles size={48} className="text-slate-700" />
+              <Clapperboard size={48} className="text-slate-700" />
               <p className="text-slate-400 font-medium">Select a smart trailer's dataset to view analytics</p>
               <p className="text-slate-600 text-sm">Expand a smart trailer on the left and click the comments dataset.</p>
             </div>
@@ -253,6 +241,17 @@ export default function AnalyticsPage() {
                 <span className="text-slate-300 font-medium truncate">
                   {selectedDataset.datasetName ?? `Dataset ${selectedDataset.datasetId.slice(0, 8)}…`}
                 </span>
+                <button
+                  onClick={() => window.open(
+                    feedbackService.sensecapDeepLink(selectedDataset.datasetId, selectedDataset.datasetName ?? undefined),
+                    '_blank',
+                    'noopener,noreferrer',
+                  )}
+                  className="ml-auto flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-all hover:opacity-80"
+                  style={{ background: 'linear-gradient(135deg,#D4A84320,#8B7CF612)', border: '1px solid #D4A84335', color: '#D4A843' }}
+                >
+                  <ExternalLink size={11} /> Open in Sensecap
+                </button>
               </div>
               <AnalyticsDashboard
                 datasetId={selectedDataset.datasetId}

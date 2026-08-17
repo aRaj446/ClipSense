@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import {
-  ArrowLeft, Trash2, Sparkles, Film, Clapperboard,
+  ArrowLeft, Trash2, Film, Clapperboard,
   HardDrive, Calendar, Zap, Clock,
   TrendingUp, TrendingDown, MessageSquare,
 } from 'lucide-react'
@@ -14,6 +14,10 @@ import Card from '../components/Card'
 import Modal from '../components/Modal'
 import LoadingSpinner from '../components/LoadingSpinner'
 import AudienceFeedbackPanel from '../components/AudienceFeedbackPanel'
+import SentimentValidationPanel from '../components/SentimentValidationPanel'
+import TrailerComparisonPanel from '../components/TrailerComparisonPanel'
+import TimeSavedCard from '../components/TimeSavedCard'
+import PipelineDiagram, { deriveSteps } from '../components/PipelineDiagram'
 import { formatDate } from '../utils/format'
 
 // ── MetaRow — identical to ProjectDetailsEmbed ────────────────────────────────
@@ -38,7 +42,7 @@ function AnalysisReport({ report }: { report: SmartTrailerJob['analysis_report']
   return (
     <Card className="space-y-4">
       <h3 className="font-semibold text-slate-100 flex items-center gap-2">
-        <Sparkles size={15} className="text-primary" /> Analysis Report
+        <Clapperboard size={15} className="text-primary" /> Analysis Report
       </h3>
       <div className="flex items-start gap-2 text-sm text-slate-300 bg-surface rounded-lg px-3 py-2.5">
         <MessageSquare size={14} className="text-primary shrink-0 mt-0.5" />
@@ -46,25 +50,25 @@ function AnalysisReport({ report }: { report: SmartTrailerJob['analysis_report']
       </div>
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
         <div className="space-y-2">
-          <p className="text-xs font-semibold text-green-400 flex items-center gap-1">
+          <p className="text-xs font-semibold flex items-center gap-1" style={{ color: '#D4A843' }}>
             <TrendingUp size={12} /> Positive Patterns
           </p>
           <ul className="space-y-1.5">
             {report.positive_patterns.map((p, i) => (
               <li key={i} className="text-xs text-slate-400 flex items-start gap-1.5">
-                <span className="text-green-500 shrink-0 mt-0.5">+</span>{p}
+                <span className="shrink-0 mt-0.5" style={{ color: '#D4A843' }}>+</span>{p}
               </li>
             ))}
           </ul>
         </div>
         <div className="space-y-2">
-          <p className="text-xs font-semibold text-red-400 flex items-center gap-1">
+          <p className="text-xs font-semibold flex items-center gap-1" style={{ color: '#F87171' }}>
             <TrendingDown size={12} /> Negative Patterns
           </p>
           <ul className="space-y-1.5">
             {report.negative_patterns.map((p, i) => (
               <li key={i} className="text-xs text-slate-400 flex items-start gap-1.5">
-                <span className="text-red-500 shrink-0 mt-0.5">−</span>{p}
+                <span className="shrink-0 mt-0.5" style={{ color: '#F87171' }}>−</span>{p}
               </li>
             ))}
           </ul>
@@ -160,7 +164,7 @@ export default function SmartDetailsPage({ jobId, onBack }: Props) {
   if (error || !job) {
     return (
       <div className="flex flex-col items-center py-16 gap-4 text-center">
-        <Sparkles size={48} className="text-slate-600" />
+        <Clapperboard size={48} className="text-slate-600" />
         <p className="text-slate-300 font-medium">{error ?? 'Smart trailer not found'}</p>
         <Button variant="ghost" icon={<ArrowLeft size={16} />} onClick={onBack}>Back</Button>
       </div>
@@ -180,9 +184,27 @@ export default function SmartDetailsPage({ jobId, onBack }: Props) {
             <p className="text-slate-400 text-sm mt-0.5">{formatDate(job.created_at)}</p>
           </div>
           <span className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-full bg-primary/15 text-primary border border-primary/20 font-medium">
-            <Sparkles size={11} /> Smart Trailer
+            <Clapperboard size={11} /> Smart Trailer
           </span>
+          {job.fast_mode === true && (
+            <span className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-full font-medium"
+              style={{ background: '#2DD4BF12', color: '#2DD4BF', border: '1px solid #2DD4BF30' }}>
+              <svg width="8" height="8" viewBox="0 0 8 8" fill="none">
+                <circle cx="4" cy="4" r="3" fill="#2DD4BF" />
+              </svg>
+              FAST DEMO MODE
+            </span>
+          )}
         </div>
+
+        {/* ── Pipeline — reflects this job's live state ── */}
+        <PipelineDiagram
+          steps={deriveSteps(job, {
+            toUpload:   onBack,
+            toTrailers: onBack,
+            toDetails:  () => { /* already on details */ },
+          })}
+        />
 
         {/* ── Video + Metadata card — mirrors ProjectDetailsEmbed grid ── */}
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
@@ -193,7 +215,7 @@ export default function SmartDetailsPage({ jobId, onBack }: Props) {
               <VideoPlayer src={videoUrl} />
             ) : (
               <div className="w-full rounded-xl bg-surface border border-surface-border aspect-video flex items-center justify-center">
-                <Sparkles size={32} className="text-slate-700" />
+                <Clapperboard size={32} className="text-slate-700" />
               </div>
             )}
             <Button variant="danger" icon={<Trash2 size={16} />} onClick={() => setDeleteModal(true)}>
@@ -204,7 +226,7 @@ export default function SmartDetailsPage({ jobId, onBack }: Props) {
           {/* 1/3 — metadata card */}
           <Card className="self-start">
             <h3 className="font-semibold text-slate-100 mb-2 flex items-center gap-2">
-              <Sparkles size={15} className="text-primary" /> Job Details
+              <Clapperboard size={15} className="text-primary" /> Job Details
             </h3>
             <MetaRow icon={<Film size={14} />}         label="Raw Footage"    value={job.raw_footage_name}    truncate />
             <MetaRow icon={<Clapperboard size={14} />} label="Sample Trailer" value={job.sample_trailer_name} truncate />
@@ -236,6 +258,17 @@ export default function SmartDetailsPage({ jobId, onBack }: Props) {
 
         {/* ── Analysis Report — smart-only section below datasets ── */}
         <AnalysisReport report={job.analysis_report} />
+
+        {/* ── Sentiment → Output Validation — maps each clip back to the sentiment
+             analysis that caused it to be selected. Answers leadership's question:
+             "how do you validate the sentiment is met with the output?" ── */}
+        <SentimentValidationPanel job={job} />
+
+        {/* ── V1 vs V2 Comparison — side-by-side original sample vs generated trailer ── */}
+        <TrailerComparisonPanel job={job} />
+
+        {/* ── Time Saved — computed from actual job timestamps + editing plan ── */}
+        <TimeSavedCard job={job} />
 
       </div>
 

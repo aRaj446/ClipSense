@@ -100,6 +100,28 @@ def create_tables() -> None:
             except Exception:
                 pass  # column already exists
 
+        # raw_footage_duration_secs — stored at generation time for time-saved calculation
+        try:
+            conn.execute(_text("ALTER TABLE smart_trailer_jobs ADD COLUMN raw_footage_duration_secs FLOAT"))
+            conn.commit()
+        except Exception:
+            pass  # column already exists
+
+        # fast_mode — records whether the job was run in fast demo mode
+        try:
+            conn.execute(_text("ALTER TABLE smart_trailer_jobs ADD COLUMN fast_mode VARCHAR"))
+            conn.commit()
+        except Exception:
+            pass  # column already exists
+
+        # GPU/device metadata columns
+        for _col in ("device_used", "encoder_used", "whisper_model_used"):
+            try:
+                conn.execute(_text(f"ALTER TABLE smart_trailer_jobs ADD COLUMN {_col} VARCHAR"))
+                conn.commit()
+            except Exception:
+                pass  # column already exists
+
         # Backfill original names for rows uploaded before this column existed
         def _clean(path: str, marker: str, jid: str) -> str:
             name = _re.split(r'[/\\]', path or '')[-1]

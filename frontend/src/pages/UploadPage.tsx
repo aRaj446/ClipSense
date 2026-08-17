@@ -2,7 +2,7 @@ import { useState, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
   CheckCircle, FileVideo, Clock, HardDrive, X,
-  Clapperboard, Film, MessageSquare, Sparkles, Loader2,
+  Clapperboard, Film, MessageSquare, Loader2, Wand2,
 } from 'lucide-react'
 import { uploadService } from '../services/uploadService'
 import { smartTrailerService } from '../services/smartTrailerService'
@@ -11,6 +11,7 @@ import FileUploader from '../components/FileUploader'
 import ProgressBar from '../components/ProgressBar'
 import Button from '../components/Button'
 import Card from '../components/Card'
+import DataSourceDisclaimer from '../components/DataSourceDisclaimer'
 import { formatFileSize, formatDuration } from '../utils/format'
 
 interface PendingFile {
@@ -66,6 +67,15 @@ function FileInput({
   )
 }
 
+const CREATIVE_CHIPS = [
+  { label: 'More action',           append: 'more action' },
+  { label: 'More emotional',        append: 'more emotional' },
+  { label: 'More humour',           append: 'more humour' },
+  { label: 'More suspense',         append: 'more suspense' },
+  { label: 'Faster pacing',         append: 'faster pacing' },
+  { label: 'More character moments',append: 'more character moments' },
+]
+
 // ── Page ──────────────────────────────────────────────────────────────────────
 
 export default function UploadPage() {
@@ -82,6 +92,7 @@ export default function UploadPage() {
   const [rawFootage,    setRawFootage]    = useState<File | null>(null)
   const [sampleTrailer, setSampleTrailer] = useState<File | null>(null)
   const [commentsFile,  setCommentsFile]  = useState<File | null>(null)
+  const [userPrompt,    setUserPrompt]    = useState('')
   const [smartUploading, setSmartUploading] = useState(false)
   const [smartPct,       setSmartPct]       = useState(0)
 
@@ -131,11 +142,12 @@ export default function UploadPage() {
         rawFootage, sampleTrailer, commentsFile,
         pct => setSmartPct(pct),
       )
-      await smartTrailerService.generate(job.id)
+      await smartTrailerService.generate(job.id, userPrompt.trim() ? { user_prompt: userPrompt.trim() } : {})
       toast('Files uploaded — generation started!')
       setRawFootage(null)
       setSampleTrailer(null)
       setCommentsFile(null)
+      // preserve userPrompt — cleared only on explicit reset or new session
       navigate('/trailers')
     } catch (err: unknown) {
       const msg = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail
@@ -173,7 +185,7 @@ export default function UploadPage() {
             mode === 'smart' ? 'bg-surface text-slate-100 shadow-sm' : 'text-slate-500 hover:text-slate-300'
           }`}
         >
-          <Sparkles size={13} /> Smart Trailer
+          <Clapperboard size={13} /> Smart Trailer
         </button>
       </div>
 
@@ -247,11 +259,8 @@ export default function UploadPage() {
       {mode === 'smart' && (
         <Card className="space-y-5">
           <div className="flex items-center gap-2">
-            <Sparkles size={15} className="text-primary" />
+            <Clapperboard size={15} className="text-primary" />
             <h2 className="font-semibold text-slate-100">Smart Trailer</h2>
-            <span className="ml-1 text-xs px-2 py-0.5 rounded-full bg-primary/10 text-primary border border-primary/20">
-              AI-Powered
-            </span>
           </div>
 
           <p className="text-sm text-slate-400 leading-relaxed">
@@ -282,6 +291,54 @@ export default function UploadPage() {
               onChange={setCommentsFile}
               icon={<MessageSquare size={14} className="shrink-0" />}
             />
+          </div>
+
+          <DataSourceDisclaimer />
+
+          {/* Creative direction */}
+          <div className="space-y-2.5">
+            <div className="flex items-center gap-2">
+              <Wand2 size={13} className="text-primary shrink-0" />
+              <span className="text-sm font-medium text-slate-200">Creative direction</span>
+              <span className="text-xs text-slate-500 ml-0.5">(optional)</span>
+            </div>
+            <p className="text-xs text-slate-500">
+              Tell ClipSense what you want the trailer to feel like.
+            </p>
+            <textarea
+              value={userPrompt}
+              onChange={e => setUserPrompt(e.target.value)}
+              placeholder="e.g. Keep the action, reduce emotional scenes, and make the trailer more humorous."
+              rows={3}
+              className="w-full resize-none rounded-lg border border-surface-border bg-surface px-3 py-2.5 text-sm text-slate-200 placeholder-slate-600 outline-none focus:ring-1 focus:ring-primary transition-colors"
+            />
+            <div className="flex flex-wrap gap-1.5">
+              {CREATIVE_CHIPS.map(chip => (
+                <button
+                  key={chip.label}
+                  type="button"
+                  onClick={() =>
+                    setUserPrompt(prev =>
+                      prev.trim()
+                        ? prev.trimEnd() + ', ' + chip.append
+                        : chip.append
+                    )
+                  }
+                  className="text-xs px-2.5 py-1 rounded-full border border-surface-border text-slate-400 hover:border-primary/40 hover:text-primary transition-colors"
+                >
+                  {chip.label}
+                </button>
+              ))}
+              {userPrompt.trim() && (
+                <button
+                  type="button"
+                  onClick={() => setUserPrompt('')}
+                  className="text-xs px-2.5 py-1 rounded-full border border-red-500/20 text-red-400 hover:border-red-500/40 transition-colors ml-auto"
+                >
+                  Clear
+                </button>
+              )}
+            </div>
           </div>
 
           {smartUploading && smartPct > 0 && smartPct < 100 && (

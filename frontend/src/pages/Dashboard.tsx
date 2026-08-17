@@ -3,13 +3,14 @@ import { useNavigate } from 'react-router-dom'
 import {
   FolderOpen, Video, Clapperboard,
   Upload, AlertCircle, Play, Youtube, Instagram, Music2, Twitter,
-  Sparkles, Trophy, Film, ArrowRight,
+  Trophy, Film, ArrowRight,
 } from 'lucide-react'
 import { useProjectFetch } from '../hooks/useProjectFetch'
 import VideoCard from '../components/VideoCard'
 import Button from '../components/Button'
 import Card from '../components/Card'
 import LoadingSpinner from '../components/LoadingSpinner'
+import PipelineDiagram, { deriveSteps } from '../components/PipelineDiagram'
 import { Project } from '../types/project'
 import { TrailerJob, SmartTrailerJob } from '../types/analysis'
 import { trailerService } from '../services/trailerService'
@@ -145,7 +146,7 @@ function TrailerCard({ job, winnerMap }: {
         {isSmart ? (
           <span className="flex items-center gap-1 text-xs font-medium px-2 py-0.5 rounded-full border"
             style={{ color: '#D4A843', background: '#D4A84312', borderColor: '#D4A84328' }}>
-            <Sparkles size={10} /> Smart
+            <Clapperboard size={10} /> Smart
           </span>
         ) : meta ? (
           <span className={`flex items-center gap-1 text-xs font-medium px-2 py-0.5 rounded-full border ${meta.color}`}>
@@ -236,7 +237,7 @@ function Hero({ totalTrailers, totalProjects }: { totalTrailers: number; totalPr
                   <span style={{ color: '#E8C56A', fontWeight: 600 }}>{totalProjects}</span> project{totalProjects !== 1 ? 's' : ''} &nbsp;·&nbsp;
                   <span style={{ color: '#8B7CF6', fontWeight: 600 }}>{totalTrailers}</span> trailer{totalTrailers !== 1 ? 's' : ''} generated
                 </>
-              : 'Upload your first video and let AI craft your perfect trailer.'}
+              : 'Upload your first video to get started.'}
           </p>
         </div>
 
@@ -246,7 +247,7 @@ function Hero({ totalTrailers, totalProjects }: { totalTrailers: number; totalPr
             className="px-6 py-2.5">
             Upload Video
           </Button>
-          <p className="text-xs text-center" style={{ color: '#5C5A72' }}>AI-powered trailer generation</p>
+
         </div>
       </div>
 
@@ -362,6 +363,22 @@ export default function Dashboard() {
         </div>
       )}
 
+      {/* ── Pipeline ─────────────────────────────────────────────────────── */}
+      <div className="animate-fade-in" style={{ animationDelay: '320ms' }}>
+        <PipelineDiagram
+          steps={deriveSteps(
+            allSmartTrailers.length > 0 ? allSmartTrailers[0] : null,
+            {
+              toUpload:   () => navigate('/upload'),
+              toTrailers: () => navigate('/trailers?mode=smart'),
+              toDetails:  () => allSmartTrailers.length > 0
+                ? navigate(`/smart-trailer/${allSmartTrailers[0].id}`)
+                : navigate('/trailers?mode=smart'),
+            },
+          )}
+        />
+      </div>
+
       {/* ── Recent Projects ───────────────────────────────────────────────── */}
       <div className="animate-fade-in" style={{ animationDelay: '280ms' }}>
         <div className="flex items-center justify-between mb-4">
@@ -428,11 +445,11 @@ function SmartProjectCard({ job, onClick }: { job: SmartTrailerJob; onClick: () 
         <div className="flex items-start justify-between mb-4">
           <div className="p-2.5 rounded-xl"
             style={{ background: 'linear-gradient(135deg,#D4A84320,#8B7CF612)', border: '1px solid #D4A84325' }}>
-            <Sparkles size={18} style={{ color: '#D4A843' }} />
+            <Clapperboard size={18} style={{ color: '#D4A843' }} />
           </div>
           <span className="flex items-center gap-1 text-xs px-2 py-0.5 rounded-full font-medium"
             style={{ background: '#D4A84312', color: '#D4A843', border: '1px solid #D4A84328' }}>
-            <Sparkles size={9} /> Smart
+            <Clapperboard size={9} /> Smart
           </span>
         </div>
         <h3 className="font-medium truncate mb-1" style={{ color: '#F0EDE8' }} title={job.raw_footage_name}>

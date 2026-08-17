@@ -186,7 +186,6 @@ class TrailerJobResponse(BaseModel):
     editing_plan: Optional[dict] = None
     platform: Optional[str] = None
     clip_score: Optional[float] = None
-    gemini_used: Optional[bool] = None
     fallback_warning: Optional[str] = None
     error_message: Optional[str] = None
     created_at: str
@@ -201,6 +200,59 @@ class GenerateTrailerRequest(BaseModel):
 
 
 # ── Smart Trailer schemas ───────────────────────────────────────────────────────────────
+
+_ALLOWED_LUFS = {-16, -14, -12, -10}
+
+
+class AudioSettings(BaseModel):
+    """
+    Per-job audio normalisation controls.
+
+    target_lufs: Final output loudness in LUFS. Default -14 preserves existing behaviour.
+    bass_boost:  Apply +4 dB low-shelf EQ at 100 Hz. Default False.
+    treble_cut:  Apply -3 dB high-shelf EQ at 8 kHz. Default False.
+    """
+    target_lufs: int = -14
+    bass_boost: bool = False
+    treble_cut: bool = False
+
+    def model_post_init(self, __context) -> None:
+        if self.target_lufs not in _ALLOWED_LUFS:
+            raise ValueError(f"target_lufs must be one of {sorted(_ALLOWED_LUFS)}, got {self.target_lufs}")
+
+
+class SmartTrailerGenerateRequest(BaseModel):
+    """Optional body for POST /smart-trailer/generate/{job_id}."""
+    user_prompt: Optional[str] = None        # free-form creative direction from the editor
+    audio: Optional[AudioSettings] = None   # audio normalisation controls
+    include_subtitles: bool = False          # burn transcript subtitles into the output
+    fast_mode: bool = False                  # skip Whisper transcription for faster demo generation
+
+
+class TimeSavedBreakdown(BaseModel):
+    """
+    Auditable time-saved breakdown for a completed smart trailer job.
+
+    Calculation (all values in hours):
+
+        raw_footage_duration_secs  — actual raw footage length probed by FFmpeg (seconds)
+        raw_footage_duration_mins  = raw_footage_duration_secs / 60
+
+        MANUAL_EDIT_RATIO = 0.5
+        manual_editing_hours = raw_footage_duration_mins * MANUAL_EDIT_RATIO / 60
+            i.e. raw_footage_duration_secs / 60 * 0.5 / 60
+
+        processing_hours = (completed_at - started_at).total_seconds() / 3600
+            where started_at  = job.created_at  (row inserted when files uploaded)
+                  completed_at = job.updated_at  (last DB write = job completion)
+
+        estimated_time_saved_hours = max(manual_editing_hours - processing_hours, 0)
+    """
+    manual_editing_hours: float          # estimated hours a human editor would spend
+    processing_hours: float              # actual ClipSense wall-clock time in hours
+    estimated_time_saved_hours: float    # max(manual - processing, 0)
+    raw_footage_duration_secs: float     # source value used for manual estimate
+
 
 class SmartTrailerAnalysis(BaseModel):
     """Analysis output produced by the Smart Trailer Agent."""
@@ -220,13 +272,15 @@ class SmartTrailerJobResponse(BaseModel):
     comments_name: str
     status: str
     output_url: Optional[str] = None
+    sample_trailer_url: Optional[str] = None
     editing_plan: Optional[dict] = None
     analysis_report: Optional[dict] = None
     platform: Optional[str] = None
     clip_score: Optional[float] = None
-    gemini_used: Optional[bool] = None
     fallback_warning: Optional[str] = None
     error_message: Optional[str] = None
+    raw_footage_duration_secs: Optional[float] = None
+    fast_mode: Optional[bool] = None
     created_at: str
     updated_at: str
 

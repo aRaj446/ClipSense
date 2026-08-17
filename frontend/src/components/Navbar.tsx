@@ -1,13 +1,8 @@
-import { Zap } from 'lucide-react'
-
 export default function Navbar() {
   return (
     <header className="h-16 border-b border-surface-border bg-surface-card/50 backdrop-blur-sm
       flex items-center px-6 gap-3 sticky top-0 z-30">
       <div className="flex items-center gap-2">
-        <div className="p-1.5 bg-primary rounded-lg">
-          <Zap size={16} className="text-white" />
-        </div>
         <span className="font-bold text-slate-100 text-lg tracking-tight">ClipSense</span>
       </div>
       <span className="ml-2 text-xs text-slate-500 bg-surface-border px-2 py-0.5 rounded-full">

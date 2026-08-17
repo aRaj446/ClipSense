@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
-import { Clapperboard, Film, ChevronRight, Zap, Brain } from 'lucide-react'
+import { Clapperboard, Film, ChevronRight, Zap } from 'lucide-react'
 import { Project } from '../types/project'
 import { projectService } from '../services/projectService'
 import LoadingSpinner from '../components/LoadingSpinner'
@@ -82,7 +82,7 @@ export default function TrailersGalleryPage() {
           <div className="inline-flex items-center gap-2 px-4 py-2 rounded-full mb-7"
             style={{ background: 'rgba(212,168,67,0.10)', border: '1px solid rgba(212,168,67,0.30)', backdropFilter: 'blur(8px)' }}>
             <Zap size={13} style={{ color: '#D4A843' }} />
-            <span className="text-xs font-bold tracking-widest uppercase" style={{ color: '#E8C56A' }}>AI-Powered</span>
+            <span className="text-xs font-bold tracking-widest uppercase" style={{ color: '#E8C56A' }}>ClipSense Studio</span>
           </div>
 
           {/* giant heading */}
@@ -99,7 +99,7 @@ export default function TrailersGalleryPage() {
           </h1>
 
           <p className="text-lg max-w-2xl mb-8" style={{ color: '#A8A4B8' }}>
-            Generate cinematic trailers powered by sentiment analytics, beat-aligned cuts, and AI scene selection.
+            Generate cinematic trailers driven by sentiment analytics and beat-aligned scene selection.
           </p>
 
           {/* mode toggle — big pill style */}
@@ -116,7 +116,7 @@ export default function TrailersGalleryPage() {
               style={mode === 'smart'
                 ? { background: 'linear-gradient(135deg,#8B7CF6,#A78BFA)', color: '#fff', boxShadow: '0 0 24px 0 #8B7CF650' }
                 : { background: 'rgba(255,255,255,0.05)', border: '1px solid #2A2A40', color: '#A8A4B8' }}>
-              <Brain size={16} /> Smart Trailer
+              <Clapperboard size={16} /> Smart Trailer
             </button>
           </div>
         </div>

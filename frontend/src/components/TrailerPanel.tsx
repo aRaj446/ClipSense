@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
   Clapperboard, ChevronDown, Loader2, CheckCircle, XCircle,
-  Play, RefreshCw, Sparkles, Trash2, Square, MessageSquare,
+  Play, RefreshCw, Trash2, Square, MessageSquare,
   Film, Download, Clock, ArrowRight,
 } from 'lucide-react'
 import { StoredDataset, TrailerJob } from '../types/analysis'
@@ -457,7 +457,7 @@ export default function TrailerPanel({ projectId, datasets }: Props) {
           style={{ background: 'linear-gradient(145deg,#13131F,#1A1A2E)', border: '1px solid #252538' }}>
           <div className="w-14 h-14 rounded-2xl flex items-center justify-center mb-4 animate-float"
             style={{ background: 'linear-gradient(135deg,#D4A84312,#8B7CF610)', border: '1px solid #D4A84320' }}>
-            <Sparkles size={22} style={{ color: '#5C5A72' }} />
+            <Film size={22} style={{ color: '#5C5A72' }} />
           </div>
           <p className="text-sm font-semibold mb-1" style={{ color: '#F0EDE8' }}>No trailers yet</p>
           <p className="text-xs" style={{ color: '#5C5A72' }}>Select a dataset above and generate your first trailer.</p>

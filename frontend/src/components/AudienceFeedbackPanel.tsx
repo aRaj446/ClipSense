@@ -1,7 +1,6 @@
 import { useRef, useState, DragEvent, ChangeEvent } from 'react'
-import { useNavigate } from 'react-router-dom'
 import {
-  Brain, UploadCloud, FileJson, FileText, X, CheckCircle,
+  UploadCloud, FileJson, FileText, X, CheckCircle,
   Database, ChevronDown, ChevronRight, Trash2, Pencil, Download, BarChart2, Info,
 } from 'lucide-react'
 import { AnalysisResult, StoredDataset } from '../types/analysis'
@@ -13,6 +12,7 @@ import ProgressBar from './ProgressBar'
 import FeedbackSummaryCard from './FeedbackSummaryCard'
 import TimelineInsights from './TimelineInsights'
 import OptimizationRecommendations from './OptimizationRecommendations'
+import DataSourceDisclaimer from './DataSourceDisclaimer'
 import { formatFileSize } from '../utils/format'
 
 const ACCEPTED_EXTENSIONS = ['.json', '.csv', '.txt']
@@ -31,7 +31,6 @@ interface SelectedFile { file: File; ext: string }
 
 export default function AudienceFeedbackPanel({ projectId, datasets, onDatasetsChange, sampleDatasets, readOnly }: Props) {
   const { toast }    = useToast()
-  const navigate     = useNavigate()
   const inputRef     = useRef<HTMLInputElement>(null)
 
   const [selected, setSelected]   = useState<SelectedFile | null>(null)
@@ -128,7 +127,7 @@ export default function AudienceFeedbackPanel({ projectId, datasets, onDatasetsC
       <Card className="space-y-5">
 
         <div className="flex items-center gap-2">
-          <Brain size={16} className="text-primary" />
+          <Database size={16} className="text-primary" />
           <h2 className="font-semibold text-slate-100">Audience Feedback Dataset</h2>
         </div>
 
@@ -138,6 +137,8 @@ export default function AudienceFeedbackPanel({ projectId, datasets, onDatasetsC
           <span className="text-slate-300 font-medium">.csv</span> use the structured parser.{' '}
           <span className="text-slate-300 font-medium">.txt</span> is parsed automatically.
         </p>
+
+        <DataSourceDisclaimer />
 
         {/* Drop zone */}
         {!selected && (
@@ -345,7 +346,11 @@ export default function AudienceFeedbackPanel({ projectId, datasets, onDatasetsC
                   <a href={feedbackService.exportDatasetUrl(ds.id)} download title="Export as Excel" className="text-slate-600 hover:text-green-400 transition-colors shrink-0">
                     <Download size={13} />
                   </a>
-                  <button onClick={() => navigate(`/analytics?project=${projectId}&dataset=${ds.id}`)} className="text-slate-600 hover:text-primary transition-colors shrink-0" title="View analytics dashboard">
+                  <button
+                    onClick={() => window.open(feedbackService.sensecapDeepLink(ds.id, ds.name ?? undefined), '_blank', 'noopener,noreferrer')}
+                    className="text-slate-600 hover:text-primary transition-colors shrink-0"
+                    title="Open in Sensecap dashboard"
+                  >
                     <BarChart2 size={13} />
                   </button>
                   <button onClick={() => renaming === ds.id ? setRenaming(null) : startRename(ds)} className="text-slate-600 hover:text-slate-300 transition-colors shrink-0" title="Rename dataset">

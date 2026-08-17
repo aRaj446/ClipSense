@@ -2,12 +2,13 @@ import { useState, useEffect, useRef } from 'react'
 import {
   Brain, Loader2, CheckCircle, XCircle, Film,
   Play, RefreshCw, Sparkles, Trash2, Square, MessageSquare,
-  ArrowRight, Download, Clock,
+  ArrowRight, Download, Clock, Wand2, X, Volume2,
 } from 'lucide-react'
-import { SmartTrailerJob } from '../types/analysis'
+import { SmartTrailerJob, AudioSettings, DEFAULT_AUDIO_SETTINGS, TargetLufs, GenerateRequest } from '../types/analysis'
 import { smartTrailerService } from '../services/smartTrailerService'
 import { useToast } from '../context/ToastContext'
 import JobProgressPanel, { ProgressStep } from './JobProgressPanel'
+import DataSourceDisclaimer from './DataSourceDisclaimer'
 
 const POLL_INTERVAL_MS = 3000
 
@@ -30,6 +31,68 @@ const MOOD_COLOR: Record<string, { bg: string; border: string; label: string }> 
   emotional: { bg: '#8B7CF618', border: '#8B7CF6', label: 'Emotional' },
   dialogue:  { bg: '#D4A84318', border: '#D4A843', label: 'Dialogue' },
   calm:      { bg: '#2DD4BF18', border: '#2DD4BF', label: 'Calm' },
+}
+
+const CREATIVE_CHIPS = [
+  { label: 'More action',            append: 'more action' },
+  { label: 'More emotional',         append: 'more emotional' },
+  { label: 'More humour',            append: 'more humour' },
+  { label: 'More suspense',          append: 'more suspense' },
+  { label: 'Faster pacing',          append: 'faster pacing' },
+  { label: 'More character moments', append: 'more character moments' },
+]
+
+const LUFS_OPTIONS: { value: TargetLufs; label: string }[] = [
+  { value: -16, label: '-16 LUFS' },
+  { value: -14, label: '-14 LUFS' },
+  { value: -12, label: '-12 LUFS' },
+  { value: -10, label: '-10 LUFS' },
+]
+
+function AudioToggle({
+  checked, onChange, label, description,
+}: { checked: boolean; onChange: (v: boolean) => void; label: string; description: string }) {
+  return (
+    <label className="flex items-start gap-3 cursor-pointer group">
+      <div
+        className="relative mt-0.5 w-4 h-4 rounded shrink-0 flex items-center justify-center transition-colors"
+        style={{
+          background: checked ? '#8B7CF620' : 'transparent',
+          border: `1px solid ${checked ? '#8B7CF6' : '#252538'}`,
+        }}
+        onClick={() => onChange(!checked)}
+      >
+        {checked && (
+          <svg width="9" height="7" viewBox="0 0 9 7" fill="none">
+            <path d="M1 3.5L3.5 6L8 1" stroke="#8B7CF6" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+          </svg>
+        )}
+      </div>
+      <div onClick={() => onChange(!checked)}>
+        <p className="text-xs font-medium leading-none mb-0.5" style={{ color: '#F0EDE8' }}>{label}</p>
+        <p className="text-xs" style={{ color: '#5C5A72' }}>{description}</p>
+      </div>
+    </label>
+  )
+}
+
+function CreativeChip({ label, onAppend }: { label: string; onAppend: () => void }) {
+  const [hovered, setHovered] = useState(false)
+  return (
+    <button
+      type="button"
+      onClick={onAppend}
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
+      className="text-xs px-2 py-0.5 rounded-full border transition-colors"
+      style={{
+        borderColor: hovered ? '#D4A84340' : '#252538',
+        color: hovered ? '#D4A843' : '#5C5A72',
+      }}
+    >
+      {label}
+    </button>
+  )
 }
 
 function fmt(secs: number) {
@@ -137,6 +200,11 @@ export default function SmartTrailerPanel({ onSelectJob }: { onSelectJob?: (id: 
   const [loadingJobs, setLoadingJobs] = useState(true)
   const [activeJobId, setActiveJobId] = useState<string | null>(null)
   const [progress,    setProgress]    = useState<{ stage: string; percent: number; message: string; steps: ProgressStep[] } | null>(null)
+  const [retryJobId,     setRetryJobId]     = useState<string | null>(null)
+  const [retryPrompt,    setRetryPrompt]    = useState('')
+  const [audioSettings,  setAudioSettings]  = useState<AudioSettings>({ ...DEFAULT_AUDIO_SETTINGS })
+  const [includeSubtitles, setIncludeSubtitles] = useState(false)
+  const [fastMode,       setFastMode]       = useState(false)
   const pollRef     = useRef<ReturnType<typeof setInterval> | null>(null)
   const sseUnsubRef = useRef<(() => void) | null>(null)
 
@@ -204,17 +272,40 @@ export default function SmartTrailerPanel({ onSelectJob }: { onSelectJob?: (id: 
     try {
       await smartTrailerService.deleteJob(jobId)
       setJobs(prev => prev.filter(j => j.id !== jobId))
+      if (retryJobId === jobId) { setRetryJobId(null); setRetryPrompt('') }
       toast('Job deleted.')
     } catch { toast('Failed to delete.', 'error') }
   }
 
-  async function handleRetry(job: SmartTrailerJob) {
+  async function handleRetry(job: SmartTrailerJob, prompt?: string) {
+    if (activeJobId) { toast('A generation is already in progress.', 'error'); return }
+    setRetryJobId(null)
+    setRetryPrompt('')
+    const req: GenerateRequest = {}
+    if (prompt?.trim()) req.user_prompt = prompt.trim()
+    if (audioSettings.target_lufs !== DEFAULT_AUDIO_SETTINGS.target_lufs ||
+      audioSettings.bass_boost ||
+      audioSettings.treble_cut
+    ) req.audio = audioSettings
+    if (includeSubtitles && !fastMode) req.include_subtitles = true
+    if (fastMode) req.fast_mode = true
     try {
-      const started = await smartTrailerService.generate(job.id)
+      const started = await smartTrailerService.generate(job.id, req)
       setJobs(prev => prev.map(j => j.id === started.id ? started : j))
       setActiveJobId(started.id)
       toast(job.status === 'done' ? 'Regenerating trailer…' : 'Retrying generation…')
     } catch { toast('Failed to retry.', 'error') }
+  }
+
+  function openRetry(job: SmartTrailerJob) {
+    // Pre-populate from previous creative direction if present in rationale
+    const match = job.editing_plan?.rationale?.match(/Creative direction applied:\s*(.+?)\./)
+    const prefill = match ? match[1].split(' · ').join(', ') : ''
+    setRetryJobId(job.id)
+    setRetryPrompt(prefill)
+    setAudioSettings({ ...DEFAULT_AUDIO_SETTINGS })
+    setIncludeSubtitles(false)
+    setFastMode(false)
   }
 
   if (loadingJobs) {
@@ -334,8 +425,32 @@ export default function SmartTrailerPanel({ onSelectJob }: { onSelectJob?: (id: 
                     {job.error_message && (
                       <p className="text-xs mt-0.5 truncate" style={{ color: '#F87171' }}>{job.error_message}</p>
                     )}
-                    {job.editing_plan?.rationale && (
+                    {/* Rationale — hide when creative direction badge will show */}
+                    {job.editing_plan?.rationale && !job.editing_plan.rationale.match(/Creative direction applied:/) && (
                       <p className="text-xs mt-0.5 truncate" style={{ color: '#5C5A72' }}>{job.editing_plan.rationale}</p>
+                    )}
+                    {/* Creative direction applied banner */}
+                    {job.status === 'done' && (() => {
+                      const match = job.editing_plan?.rationale?.match(/Creative direction applied:\s*(.+?)\./)
+                      if (!match) return null
+                      return (
+                        <span className="inline-flex items-center gap-1.5 text-xs px-2 py-0.5 rounded-full mt-1"
+                          style={{ background: '#D4A84315', color: '#D4A843', border: '1px solid #D4A84330' }}>
+                          <Wand2 size={10} />
+                          Creative direction applied
+                          <span style={{ color: '#A8A4B8' }}>· {match[1]}</span>
+                        </span>
+                      )
+                    })()}
+                    {/* Fast Demo Mode badge */}
+                    {job.fast_mode === true && (
+                      <span className="inline-flex items-center gap-1.5 text-xs px-2 py-0.5 rounded-full mt-1"
+                        style={{ background: '#2DD4BF12', color: '#2DD4BF', border: '1px solid #2DD4BF30' }}>
+                        <svg width="8" height="8" viewBox="0 0 8 8" fill="none" style={{ flexShrink: 0 }}>
+                          <circle cx="4" cy="4" r="3" fill="#2DD4BF" />
+                        </svg>
+                        FAST DEMO MODE
+                      </span>
                     )}
                   </div>
 
@@ -345,9 +460,11 @@ export default function SmartTrailerPanel({ onSelectJob }: { onSelectJob?: (id: 
                     </span>
                     {(job.status === 'failed' || job.status === 'done') && (
                       <button
-                        onClick={e => { e.stopPropagation(); handleRetry(job) }}
+                        onClick={e => { e.stopPropagation(); openRetry(job) }}
                         className="p-1.5 rounded-lg transition-colors"
-                        style={{ color: '#8B7CF6', background: '#8B7CF610' }}>
+                        style={{ color: '#8B7CF6', background: retryJobId === job.id ? '#8B7CF620' : '#8B7CF610' }}
+                        title="Regenerate with creative direction"
+                      >
                         <RefreshCw size={13} />
                       </button>
                     )}
@@ -361,6 +478,162 @@ export default function SmartTrailerPanel({ onSelectJob }: { onSelectJob?: (id: 
                     )}
                   </div>
                 </div>
+
+                {/* ── Retry prompt panel ── */}
+                {retryJobId === job.id && (
+                  <div
+                    className="px-5 py-4 space-y-3"
+                    style={{ background: '#0E0E1A', borderBottom: '1px solid #1E1E30' }}
+                    onClick={e => e.stopPropagation()}
+                  >
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-1.5">
+                        <Wand2 size={12} style={{ color: '#D4A843' }} />
+                        <span className="text-xs font-semibold" style={{ color: '#D4A843' }}>Creative direction</span>
+                        <span className="text-xs" style={{ color: '#5C5A72' }}>(optional)</span>
+                      </div>
+                      <button
+                        onClick={() => { setRetryJobId(null); setRetryPrompt('') }}
+                        style={{ color: '#5C5A72' }}
+                      >
+                        <X size={13} />
+                      </button>
+                    </div>
+                    <textarea
+                      value={retryPrompt}
+                      onChange={e => setRetryPrompt(e.target.value)}
+                      placeholder="e.g. Keep the action, reduce emotional scenes, make it more humorous."
+                      rows={2}
+                      className="w-full resize-none rounded-lg px-3 py-2 text-xs outline-none transition-colors"
+                      style={{
+                        background: '#13131F',
+                        border: '1px solid #252538',
+                        color: '#F0EDE8',
+                      }}
+                      onFocus={e => (e.target.style.borderColor = '#D4A84360')}
+                      onBlur={e => (e.target.style.borderColor = '#252538')}
+                    />
+                    <div className="flex flex-wrap gap-1.5">
+                      {CREATIVE_CHIPS.map(chip => (
+                        <CreativeChip
+                          key={chip.label}
+                          label={chip.label}
+                          onAppend={() =>
+                            setRetryPrompt(prev =>
+                              prev.trim() ? prev.trimEnd() + ', ' + chip.append : chip.append
+                            )
+                          }
+                        />
+                      ))}
+                    </div>
+                    {/* ── AUDIO section ── */}
+                    <DataSourceDisclaimer />
+                    <div className="pt-1 space-y-2.5">
+                      <div className="flex items-center gap-1.5">
+                        <Volume2 size={12} style={{ color: '#8B7CF6' }} />
+                        <span className="text-xs font-semibold uppercase tracking-widest" style={{ color: '#5C5A72' }}>Audio</span>
+                      </div>
+
+                      {/* Target Loudness */}
+                      <div className="flex items-center justify-between">
+                        <span className="text-xs" style={{ color: '#A8A4B8' }}>Target Loudness</span>
+                        <select
+                          value={audioSettings.target_lufs}
+                          onChange={e => setAudioSettings(prev => ({ ...prev, target_lufs: Number(e.target.value) as TargetLufs }))}
+                          className="text-xs rounded-lg px-2 py-1 outline-none"
+                          style={{
+                            background: '#13131F',
+                            border: '1px solid #252538',
+                            color: '#F0EDE8',
+                            minWidth: 100,
+                          }}
+                        >
+                          {LUFS_OPTIONS.map(opt => (
+                            <option key={opt.value} value={opt.value}>{opt.label}</option>
+                          ))}
+                        </select>
+                      </div>
+
+                      {/* Audio tone toggles */}
+                      <div className="space-y-2">
+                        <span className="text-xs" style={{ color: '#A8A4B8' }}>Audio tone</span>
+                        <AudioToggle
+                          checked={audioSettings.bass_boost}
+                          onChange={v => setAudioSettings(prev => ({ ...prev, bass_boost: v }))}
+                          label="Bass boost"
+                          description="Enhance low-frequency impact."
+                        />
+                        <AudioToggle
+                          checked={audioSettings.treble_cut}
+                          onChange={v => setAudioSettings(prev => ({ ...prev, treble_cut: v }))}
+                          label="Treble reduction"
+                          description="Soften high-frequency intensity."
+                        />
+                      </div>
+
+                      {/* Subtitle toggle — visual output, separated from audio controls */}
+                      <div className="pt-1" style={{ borderTop: '1px solid #1E1E30' }}>
+                        <AudioToggle
+                          checked={includeSubtitles && !fastMode}
+                          onChange={v => setIncludeSubtitles(v)}
+                          label="Include subtitles"
+                          description={fastMode ? 'Unavailable in fast demo mode.' : 'Burn dialogue subtitles into the generated trailer.'}
+                        />
+                        {includeSubtitles && !fastMode && (
+                          <div className="flex items-center gap-1.5 mt-2 text-xs px-2 py-1 rounded-lg"
+                            style={{ background: '#8B7CF610', border: '1px solid #8B7CF625', color: '#8B7CF6' }}>
+                            <svg width="8" height="8" viewBox="0 0 8 8" fill="none">
+                              <circle cx="4" cy="4" r="3" fill="#8B7CF6" />
+                            </svg>
+                            Subtitles enabled
+                          </div>
+                        )}
+                      </div>
+
+                      {/* Fast Demo Mode — visually secondary, below subtitle toggle */}
+                      <div className="pt-2" style={{ borderTop: '1px solid #1E1E30' }}>
+                        <AudioToggle
+                          checked={fastMode}
+                          onChange={v => { setFastMode(v); if (v) setIncludeSubtitles(false) }}
+                          label="Fast demo mode"
+                          description="Skip transcription to reduce generation time."
+                        />
+                        {fastMode && (
+                          <p className="text-xs mt-1.5 ml-7" style={{ color: '#5C5A72' }}>
+                            Dialogue-based features may be unavailable.
+                          </p>
+                        )}
+                      </div>
+                    </div>
+
+                    <div className="flex items-center gap-2 pt-1">
+                      <button
+                        onClick={() => handleRetry(job, retryPrompt)}
+                        className="flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-lg transition-colors"
+                        style={{ background: '#8B7CF620', color: '#8B7CF6', border: '1px solid #8B7CF630' }}
+                      >
+                        <RefreshCw size={11} />
+                        {job.status === 'done' ? 'Regenerate' : 'Retry'}
+                      </button>
+                      <button
+                        onClick={() => { setRetryJobId(null); setRetryPrompt('') }}
+                        className="text-xs"
+                        style={{ color: '#5C5A72' }}
+                      >
+                        Cancel
+                      </button>
+                      {retryPrompt.trim() && (
+                        <button
+                          onClick={() => setRetryPrompt('')}
+                          className="text-xs ml-auto"
+                          style={{ color: '#5C5A72' }}
+                        >
+                          Clear prompt
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                )}
 
                 {/* ── Body: two-column ── */}
                 {(job.editing_plan || (job.status === 'done' && job.output_url)) && (
