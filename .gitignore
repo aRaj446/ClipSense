@@ -40,3 +40,6 @@ backend/app/clipsense.db
 backend/diag*.py
 backend/smart_job_debug.log
 backend/thread_env.log
+
+# Deprecated standalone sensescrub app (replaced by OpenReel integration)
+sensescrub/
