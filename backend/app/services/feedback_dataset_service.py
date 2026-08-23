@@ -10,10 +10,16 @@ BEFORE Agent 2 runs optimization / sentiment classification.
 
 import uuid
 import json
+import hashlib
 from sqlalchemy.orm import Session
 
 from app.models.feedback_dataset import FeedbackDataset, FeedbackSegmentRecord
 from app.schemas.feedback import FeedbackSegment
+
+
+def _compute_hash(raw_text: str) -> str:
+    """Return a 16-char hex prefix of sha256(raw_text). Used for deduplication."""
+    return hashlib.sha256(raw_text.encode("utf-8", errors="replace")).hexdigest()[:16]
 
 
 class FeedbackDatasetService:
@@ -25,17 +31,21 @@ class FeedbackDatasetService:
         raw_text: str,
         segments: list[FeedbackSegment],
         source: str = "manual_paste",
+        sample_trailer_path: str | None = None,
     ) -> FeedbackDataset:
         """
         Persist a full structured dataset.
         Called immediately after Agent 1 produces segments,
         before Agent 2 runs sentiment-based optimization.
         """
+        content_hash = _compute_hash(raw_text)
         dataset = FeedbackDataset(
             id=str(uuid.uuid4()),
             project_id=project_id,
             raw_text=raw_text,
             source=source,
+            content_hash=content_hash,
+            sample_trailer_path=sample_trailer_path,
         )
         db.add(dataset)
 
@@ -54,6 +64,48 @@ class FeedbackDatasetService:
         db.commit()
         db.refresh(dataset)
         return dataset
+
+    def save_dataset_deduped(
+        self,
+        db: Session,
+        project_id: str,
+        raw_text: str,
+        segments: list[FeedbackSegment],
+        source: str = "project_upload",
+        sample_trailer_path: str | None = None,
+    ) -> tuple[FeedbackDataset, bool]:
+        """
+        Idempotent dataset creation.
+
+        If a dataset with the same (project_id, content_hash) already exists,
+        return it without creating a duplicate. This prevents the same feedback
+        file from producing multiple analytics datasets for the same project.
+
+        Returns:
+            (dataset, created)  where created=False means an existing row was returned.
+        """
+        content_hash = _compute_hash(raw_text)
+
+        existing = (
+            db.query(FeedbackDataset)
+            .filter(
+                FeedbackDataset.project_id == project_id,
+                FeedbackDataset.content_hash == content_hash,
+            )
+            .first()
+        )
+        if existing:
+            return existing, False
+
+        dataset = self.save_dataset(
+            db=db,
+            project_id=project_id,
+            raw_text=raw_text,
+            segments=segments,
+            source=source,
+            sample_trailer_path=sample_trailer_path,
+        )
+        return dataset, True
 
     def get_datasets_for_project(
         self,

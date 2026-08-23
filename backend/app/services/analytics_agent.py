@@ -22,6 +22,7 @@ from datetime import datetime, timezone
 from app.schemas.feedback import (
     FeedbackSegment,
     AnalyticsReport,
+    AudiencePreferences,
     TopicBreakdown,
     TimelinePoint,
     ConfidenceStats,
@@ -169,6 +170,37 @@ def _compute_analytics(segments: list[FeedbackSegment]) -> AnalyticsReport:
             ))
         return rows
 
+    # ── Audience preferences ───────────────────────────────────────────────────────────
+    # liked / disliked: top topics by engagement_score
+    liked    = [t.topic for t in topic_breakdown if t.engagement_score > 0][:5]
+    disliked = [t.topic for t in sorted(topic_breakdown, key=lambda t: t.engagement_score)][:5]
+    disliked = [t for t in disliked if t not in liked]
+
+    def _top_summaries(sentiments: set[str], limit: int) -> list[str]:
+        segs = sorted(
+            [s for s in segments if s.sentiment in sentiments],
+            key=lambda s: s.confidence,
+            reverse=True,
+        )
+        seen: set[str] = set()
+        out: list[str] = []
+        for s in segs:
+            key = s.summary[:60].lower()
+            if key not in seen:
+                seen.add(key)
+                out.append(s.summary[:120])
+            if len(out) >= limit:
+                break
+        return out
+
+    audience_preferences = AudiencePreferences(
+        liked=liked,
+        disliked=disliked,
+        recurring_requests=_top_summaries({"Suggestion"}, 5),
+        recurring_complaints=_top_summaries({"Negative", "Complaint"}, 5),
+        recurring_praise=_top_summaries({"Positive", "Praise"}, 5),
+    )
+
     return AnalyticsReport(
         sentiment_distribution=sentiment_dist,
         topic_breakdown=topic_breakdown,
@@ -177,6 +209,7 @@ def _compute_analytics(segments: list[FeedbackSegment]) -> AnalyticsReport:
         sentiment_velocity=sentiment_velocity,
         top_issues=_top5(neg_topics),
         top_positives=_top5(pos_topics),
+        audience_preferences=audience_preferences,
         total_segments=len(segments),
         analyzed_at=datetime.now(timezone.utc).isoformat(),
     )

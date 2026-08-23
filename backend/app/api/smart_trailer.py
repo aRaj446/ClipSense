@@ -68,7 +68,12 @@ def _save_upload(file: UploadFile, dest_dir: str, suffix: str) -> str:
 def _serialise(job: SmartTrailerJob) -> SmartTrailerJobResponse:
     output_url = None
     if job.output_path and os.path.exists(job.output_path):
-        output_url = f"/trailers/{os.path.basename(job.output_path)}"
+        if job.project_id:
+            # Project-based job — served via the dedicated video endpoint
+            output_url = f"/project/{job.project_id}/generation/{job.id}/video"
+        else:
+            # Standalone smart job — served via /trailers/ static mount
+            output_url = f"/trailers/{os.path.basename(job.output_path)}"
 
     # Expose the sample trailer so the frontend can show V1 vs V2 comparison.
     # The sample trailer is stored under uploads/smart/<job_id>/ — serve it
@@ -94,6 +99,7 @@ def _serialise(job: SmartTrailerJob) -> SmartTrailerJobResponse:
 
     return SmartTrailerJobResponse(
         id=job.id,
+        project_id=job.project_id,
         raw_footage_name=job.raw_footage_original_name or os.path.basename(job.raw_footage_path),
         sample_trailer_name=job.sample_trailer_original_name or os.path.basename(job.sample_trailer_path),
         comments_name=job.comments_original_name or os.path.basename(job.comments_path),
@@ -166,30 +172,43 @@ def generate_smart_trailer(
     body: SmartTrailerGenerateRequest = SmartTrailerGenerateRequest(),
     db: Session = Depends(get_db),
 ):
-    job = db.query(SmartTrailerJob).filter(SmartTrailerJob.id == job_id).first()
-    if not job:
+    """Regenerate from an existing job's source files — creates a NEW job row so
+    the previous output is preserved. Returns the new job."""
+    source = db.query(SmartTrailerJob).filter(SmartTrailerJob.id == job_id).first()
+    if not source:
         raise HTTPException(404, "Job not found")
-    if job.status not in ("pending", "failed", "done"):
-        raise HTTPException(400, f"Job is already {job.status}")
+    if source.status in ("pending", "processing"):
+        raise HTTPException(400, f"Job is already {source.status}")
 
-    job.status        = "pending"
-    job.error_message = None
-    job.output_path   = None
-    job.editing_plan  = None
-    job.analysis_report = None
-    job.updated_at    = datetime.now(timezone.utc)
+    new_job = SmartTrailerJob(
+        id=str(uuid.uuid4()),
+        project_id=source.project_id,
+        dataset_id=source.dataset_id,
+        raw_footage_path=source.raw_footage_path,
+        sample_trailer_path=source.sample_trailer_path,
+        comments_path=source.comments_path,
+        raw_footage_original_name=source.raw_footage_original_name,
+        sample_trailer_original_name=source.sample_trailer_original_name,
+        comments_original_name=source.comments_original_name,
+        user_prompt=(body.user_prompt or "").strip() or None,
+        status="pending",
+        created_at=datetime.now(timezone.utc),
+        updated_at=datetime.now(timezone.utc),
+    )
+    db.add(new_job)
     db.commit()
+    db.refresh(new_job)
 
     background_tasks.add_task(
         _run_smart_job,
-        job_id=job_id,
+        job_id=new_job.id,
         user_prompt=body.user_prompt,
         audio=body.audio,
         include_subtitles=body.include_subtitles,
         fast_mode=body.fast_mode,
     )
-    logger.info("SmartTrailer: background task queued for job %s (prompt=%r, fast_mode=%s)", job_id, body.user_prompt, body.fast_mode)
-    return _serialise(job)
+    logger.info("SmartTrailer: regeneration queued as new job %s (from %s, prompt=%r)", new_job.id, job_id, body.user_prompt)
+    return _serialise(new_job)
 
 
 # ── GET /smart-trailer/job/{job_id}/progress (SSE) ───────────────────────────
@@ -355,10 +374,8 @@ def get_time_saved(job_id: str, db: Session = Depends(get_db)):
 
         manual_editing_hours:
             raw_footage_duration_secs / 60   -> raw footage minutes
-            * 0.5                            -> estimated editing hours
-            / 60                             -> convert to hours
-            = raw_footage_duration_secs / 60 * 0.5 / 60
-            = raw_footage_duration_secs / 7200
+            * 0.5                            -> editing hours (0.5 hr per min of footage)
+            = raw_footage_duration_secs / 120
 
         processing_hours:
             (job.updated_at - job.created_at).total_seconds() / 3600
@@ -378,7 +395,7 @@ def get_time_saved(job_id: str, db: Session = Depends(get_db)):
 
     # raw_footage_duration_secs is in SECONDS — confirmed from _get_video_duration()
     raw_secs = job.raw_footage_duration_secs
-    manual_editing_hours = raw_secs / 60.0 * 0.5 / 60.0   # secs -> mins -> editing-hrs -> hrs
+    manual_editing_hours = raw_secs / 60.0 * 0.3   # secs -> mins -> editing-hrs (0.3 hr per min of footage)
 
     processing_secs = max(0.0, (job.updated_at - job.created_at).total_seconds())
     processing_hours = processing_secs / 3600.0
@@ -552,7 +569,6 @@ def delete_smart_job(job_id: str, db: Session = Depends(get_db)):
 
     job_dir = os.path.join(SMART_UPLOAD_DIR, job_id)
     if os.path.isdir(job_dir):
-        import shutil
         shutil.rmtree(job_dir, ignore_errors=True)
 
     if job.output_path and os.path.exists(job.output_path):
@@ -569,11 +585,16 @@ def delete_smart_job(job_id: str, db: Session = Depends(get_db)):
 
 @router.post("/job/{job_id}/cancel", response_model=SmartTrailerJobResponse)
 def cancel_smart_job(job_id: str, db: Session = Depends(get_db)):
+    from app.utils.job_queue import cancel_job
+
     job = db.query(SmartTrailerJob).filter(SmartTrailerJob.id == job_id).first()
     if not job:
         raise HTTPException(404, "Job not found")
     if job.status not in ("pending", "processing"):
         raise HTTPException(400, "Job is not in a cancellable state")
+
+    # Signal the background thread to stop + kill any FFmpeg subprocess
+    cancel_job(job_id)
 
     job.status        = "failed"
     job.error_message = "Cancelled by user"
@@ -591,6 +612,7 @@ def _run_smart_job(
     audio: AudioSettings | None = None,
     include_subtitles: bool = False,
     fast_mode: bool = False,
+    output_dir: str | None = None,   # Phase 6: project-scoped output directory
 ) -> None:
     from app.db.database import SessionLocal
     from app.services.smart_trailer_agent import SmartTrailerAgent
@@ -607,7 +629,7 @@ def _run_smart_job(
         db.commit()
         logger.info("SmartTrailer: job %s started", job_id)
 
-        from app.utils.job_queue import job_slot
+        from app.utils.job_queue import job_slot, is_cancelled, clear_cancelled
         from app.utils.render_progress import set_progress, init_steps
         _STEPS = [
             {"key": "comments",    "label": "Parsing audience comments",  "status": "pending", "percent": 0},
@@ -621,7 +643,20 @@ def _run_smart_job(
             {"key": "normalising", "label": "Normalising audio",           "status": "pending", "percent": 0},
         ]
         set_progress(job_id, "queued", 0, "Waiting for previous job to finish…", steps=_STEPS)
+
+        # Check if cancelled while waiting in queue
+        if is_cancelled(job_id):
+            clear_cancelled(job_id)
+            logger.info("SmartTrailer: job %s was cancelled while queued", job_id)
+            return
+
         with job_slot():
+            # Check if cancelled after acquiring the slot
+            if is_cancelled(job_id):
+                clear_cancelled(job_id)
+                logger.info("SmartTrailer: job %s was cancelled before processing", job_id)
+                return
+
             agent = SmartTrailerAgent()
             output_path, plan, analysis, error, platform, clip_score, _, fallback_warning, raw_footage_duration = agent.generate(
                 raw_footage_path=job.raw_footage_path,
@@ -632,13 +667,13 @@ def _run_smart_job(
                 audio=audio,
                 include_subtitles=include_subtitles,
                 fast_mode=fast_mode,
+                output_dir=output_dir,
             )
 
         if error or not output_path:
             job.status        = "failed"
             job.error_message = error or "Unknown error"
             logger.error("SmartTrailer: job %s failed — %s", job_id, job.error_message)
-            from app.utils.render_progress import set_progress
             set_progress(job_id, "failed", 100, job.error_message)
         else:
             job.status           = "done"

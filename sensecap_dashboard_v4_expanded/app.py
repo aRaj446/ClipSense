@@ -13,7 +13,7 @@ import plotly.express as px
 import plotly.graph_objects as go
 import requests
 import streamlit as st
-import streamlit.components.v1 as components
+import streamlit.components.v1 as components  # noqa: F401  (kept for dashboard charts)
 from wordcloud import STOPWORDS, WordCloud
 
 st.set_page_config(
@@ -31,6 +31,8 @@ if "clipsense_mode" not in st.session_state:
     st.session_state["clipsense_mode"] = False
 if "clipsense_dataset_url" not in st.session_state:
     st.session_state["clipsense_dataset_url"] = None
+if "audience_preferences" not in st.session_state:
+    st.session_state["audience_preferences"] = None
 
 # -----------------------------------------------------------------------------
 # ClipSense deep-link loader
@@ -47,6 +49,13 @@ def _clipsense_url_allowed(url: str) -> bool:
         return "{u.scheme}://{u.netloc}".format(u=p) == _ALLOWED_ORIGIN
     except Exception:
         return False
+
+def _parse_pipe(val) -> list:
+    """Decode a pipe-delimited cell back into a list, unescaping \\| → |."""
+    if not val or (isinstance(val, float) and val != val):
+        return []
+    return [item.replace("\\|", "|") for item in str(val).split("|") if item.strip()]
+
 
 def normalize_clipsense(raw: pd.DataFrame) -> pd.DataFrame:
     """Map SENSECAP_CS_COLUMNS → Sensecap internal schema without fabricating geo/ROI."""
@@ -89,6 +98,30 @@ def normalize_clipsense(raw: pd.DataFrame) -> pd.DataFrame:
             df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0.0)
     return df
 
+
+def _extract_audience_preferences(df: pd.DataFrame) -> dict:
+    """
+    Read audience_preferences from the first data row of the ap_* columns.
+    Returns a dict with keys: liked, disliked, recurring_requests,
+    recurring_complaints, recurring_praise — each a list of strings.
+    Returns all-empty lists if the columns are absent.
+    """
+    ap = {"liked": [], "disliked": [], "recurring_requests": [], "recurring_complaints": [], "recurring_praise": []}
+    if df.empty:
+        return ap
+    row = df.iloc[0]
+    mapping = {
+        "liked":                "ap_liked",
+        "disliked":             "ap_disliked",
+        "recurring_requests":   "ap_recurring_requests",
+        "recurring_complaints": "ap_recurring_complaints",
+        "recurring_praise":     "ap_recurring_praise",
+    }
+    for key, col in mapping.items():
+        if col in df.columns:
+            ap[key] = _parse_pipe(row.get(col, ""))
+    return ap
+
 _params = st.query_params
 if _params.get("source") == "clipsense":
     _dataset_url  = _params.get("dataset_url", "")
@@ -102,6 +135,7 @@ if _params.get("source") == "clipsense":
                 resp = requests.get(_dataset_url, timeout=15)
                 resp.raise_for_status()
                 raw = pd.read_csv(io.StringIO(resp.text))
+                st.session_state["audience_preferences"] = _extract_audience_preferences(raw)
                 st.session_state["df"] = normalize_clipsense(raw)
                 st.session_state["uploaded_name"] = _dataset_name
                 st.session_state["clipsense_mode"] = True
@@ -162,395 +196,63 @@ def normalize(df):
 # Skipped entirely when arriving via ClipSense deep-link (df already loaded).
 # -----------------------------------------------------------------------------
 if st.session_state["df"] is None:
-    # ── UPLOAD GATE — full-page premium experience ────────────────────────────
-    # Inject page-level styles (same token set as the dashboard)
     st.markdown("""
     <style>
       html, body, [data-testid="stAppViewContainer"],
       section[data-testid="stMain"], .block-container,
       [data-testid="stMainBlockContainer"] {
         background: #F8F6F1 !important;
-        padding: 0 !important;
-        margin: 0 !important;
-        max-width: 100% !important;
       }
-      header[data-testid="stHeader"],
-      div[data-testid="stToolbar"],
-      section[data-testid="stSidebar"],
-      [data-testid="stDecoration"],
+      header[data-testid="stHeader"], div[data-testid="stToolbar"],
+      section[data-testid="stSidebar"], [data-testid="stDecoration"],
       [data-testid="stStatusWidget"] { display: none !important; }
-
-      /* hide the native file-uploader label + drag area — we show our own UI */
       [data-testid="stFileUploaderDropzone"] {
-        opacity: 0 !important;
-        position: absolute !important;
-        width: 1px !important;
-        height: 1px !important;
-        overflow: hidden !important;
-        pointer-events: none !important;
-      }
-      [data-testid="stFileUploader"] label { display: none !important; }
-      /* but keep the hidden input reachable for our JS click */
-      [data-testid="stFileUploaderDropzone"] input[type="file"] {
-        opacity: 0 !important;
-        position: absolute !important;
-        width: 100% !important;
-        height: 100% !important;
-        cursor: pointer !important;
-        pointer-events: auto !important;
+        border: 1.5px dashed #D5CBBF !important;
+        border-radius: 14px !important;
+        background: #fff !important;
       }
     </style>
     """, unsafe_allow_html=True)
 
-    # The visual upload page — entirely self-contained HTML/CSS
-    components.html("""
-<!DOCTYPE html>
-<html>
-<head>
-<meta charset="utf-8">
-<style>
-  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-  html, body {
-    height: 100%;
-    background: #F8F6F1;
-    font-family: Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif;
-    -webkit-font-smoothing: antialiased;
-    color: #26221F;
-    overflow: hidden;
-  }
-
-  /* ── full-viewport centering ── */
-  .page {
-    min-height: 100vh;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    padding: 40px 24px;
-  }
-
-  /* ── logo ── */
-  .brand {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    margin-bottom: 28px;
-    animation: fadeDown 560ms cubic-bezier(.22,1,.36,1) both;
-  }
-  .brand-dot {
-    width: 30px; height: 30px;
-    border-radius: 50%;
-    background: #F47A20;
-    display: flex; align-items: center; justify-content: center;
-    box-shadow: 0 3px 12px rgba(244,122,32,.35);
-    flex-shrink: 0;
-    animation: floatIcon 3.6s ease-in-out infinite;
-  }
-  .brand-dot svg { display: block; }
-  .brand-name {
-    font-size: 22px;
-    font-weight: 740;
-    letter-spacing: -.5px;
-    color: #D85E16;
-  }
-
-  /* ── headline block ── */
-  .headline-block {
-    text-align: center;
-    margin-bottom: 36px;
-    animation: fadeDown 580ms 60ms cubic-bezier(.22,1,.36,1) both;
-  }
-  .headline {
-    font-size: 38px;
-    font-weight: 720;
-    letter-spacing: -1.6px;
-    line-height: 1.05;
-    color: #26221F;
-  }
-  .subline {
-    margin-top: 12px;
-    font-size: 14px;
-    font-weight: 400;
-    color: #91887E;
-    line-height: 1.6;
-    max-width: 420px;
-    margin-left: auto;
-    margin-right: auto;
-  }
-
-  /* ── upload card ── */
-  .upload-card {
-    width: 100%;
-    max-width: 520px;
-    background: #FFFFFF;
-    border: 1.5px dashed #D5CBBF;
-    border-radius: 18px;
-    padding: 44px 40px 40px;
-    box-shadow: 0 4px 24px rgba(50,40,30,.07), 0 1px 3px rgba(50,40,30,.04);
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    text-align: center;
-    cursor: pointer;
-    transition: border-color 220ms ease, box-shadow 220ms ease, background 220ms ease;
-    animation: fadeUp 600ms 120ms cubic-bezier(.22,1,.36,1) both;
-    position: relative;
-    overflow: hidden;
-  }
-  .upload-card::before {
-    content: '';
-    position: absolute; inset: 0;
-    background-image: radial-gradient(rgba(244,122,32,.04) 1px, transparent 1px);
-    background-size: 20px 20px;
-    border-radius: 18px;
-    pointer-events: none;
-  }
-  .upload-card:hover {
-    border-color: #F47A20;
-    box-shadow: 0 8px 36px rgba(244,122,32,.12), 0 1px 3px rgba(50,40,30,.04);
-    background: #FFFCF9;
-  }
-  .upload-card.drag-over {
-    border-color: #F47A20;
-    background: #FFF7F0;
-    box-shadow: 0 8px 36px rgba(244,122,32,.16);
-  }
-
-  /* ── upload icon ── */
-  .upload-icon-wrap {
-    width: 60px; height: 60px;
-    border-radius: 50%;
-    background: #FFF0E3;
-    display: flex; align-items: center; justify-content: center;
-    margin-bottom: 20px;
-    flex-shrink: 0;
-    animation: floatIcon 3.6s ease-in-out infinite;
-  }
-  .upload-icon-wrap svg { display: block; }
-
-  .drop-text {
-    font-size: 16px;
-    font-weight: 660;
-    color: #26221F;
-    letter-spacing: -.2px;
-  }
-  .or-divider {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-    width: 100%;
-    max-width: 240px;
-    margin: 16px auto;
-    color: #B5AFA8;
-    font-size: 11px;
-    font-weight: 500;
-    letter-spacing: .4px;
-    text-transform: uppercase;
-  }
-  .or-divider::before,
-  .or-divider::after {
-    content: '';
-    flex: 1;
-    height: 1px;
-    background: #E9E3DA;
-  }
-
-  .browse-btn {
-    display: inline-flex;
-    align-items: center;
-    gap: 7px;
-    background: #F47A20;
-    color: #fff;
-    border: none;
-    border-radius: 999px;
-    padding: 10px 22px;
-    font-size: 13px;
-    font-weight: 620;
-    font-family: inherit;
-    cursor: pointer;
-    transition: background 180ms ease, transform 180ms ease, box-shadow 180ms ease;
-    box-shadow: 0 2px 10px rgba(244,122,32,.28);
-  }
-  .browse-btn:hover {
-    background: #D85E16;
-    transform: translateY(-1px);
-    box-shadow: 0 5px 18px rgba(244,122,32,.34);
-  }
-  .browse-btn:active { transform: translateY(0); }
-
-  /* ── supported fields ── */
-  .fields-block {
-    margin-top: 28px;
-    text-align: center;
-    animation: fadeUp 620ms 200ms cubic-bezier(.22,1,.36,1) both;
-  }
-  .fields-label {
-    font-size: 11px;
-    font-weight: 500;
-    color: #B5AFA8;
-    letter-spacing: .5px;
-    text-transform: uppercase;
-    margin-bottom: 10px;
-  }
-  .pills {
-    display: flex;
-    flex-wrap: wrap;
-    justify-content: center;
-    gap: 7px;
-  }
-  .pill {
-    padding: 5px 13px;
-    border-radius: 999px;
-    background: #F4F0EA;
-    border: 1px solid #E9E3DA;
-    color: #756E66;
-    font-size: 11px;
-    font-weight: 500;
-    letter-spacing: .1px;
-    transition: background 160ms ease, border-color 160ms ease;
-  }
-  .pill:hover {
-    background: #FFF0E3;
-    border-color: #F6C89A;
-    color: #D85E16;
-  }
-
-  /* ── keyframes ── */
-  @keyframes fadeDown {
-    from { opacity: 0; transform: translateY(-8px); }
-    to   { opacity: 1; transform: translateY(0); }
-  }
-  @keyframes fadeUp {
-    from { opacity: 0; transform: translateY(10px); }
-    to   { opacity: 1; transform: translateY(0); }
-  }
-  @keyframes floatIcon {
-    0%, 100% { transform: translateY(0); }
-    50%       { transform: translateY(-5px); }
-  }
-
-  @media (prefers-reduced-motion: reduce) {
-    .brand, .headline-block, .upload-card, .fields-block {
-      animation: none !important;
-      opacity: 1 !important;
-      transform: none !important;
-    }
-    .brand-dot, .upload-icon-wrap { animation: none !important; }
-  }
-</style>
-<body>
-<div class="page">
-
-  <!-- Logo -->
-  <div class="brand">
-    <div class="brand-dot">
-      <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
-        <circle cx="6" cy="6" r="4" stroke="white" stroke-width="2.2"/>
-      </svg>
+    st.html("""
+    <div style="max-width:520px;margin:10vh auto 0;text-align:center;font-family:Inter,-apple-system,sans-serif;">
+      <div style="display:inline-flex;align-items:center;gap:10px;margin-bottom:24px;">
+        <span style="width:30px;height:30px;border-radius:50%;background:#F47A20;display:inline-flex;align-items:center;justify-content:center;box-shadow:0 3px 12px rgba(244,122,32,.35);">
+          <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><circle cx="6" cy="6" r="4" stroke="white" stroke-width="2.2"/></svg>
+        </span>
+        <span style="font-size:22px;font-weight:740;letter-spacing:-.5px;color:#D85E16;">Sensecap</span>
+      </div>
+      <div style="font-size:36px;font-weight:720;letter-spacing:-1.6px;line-height:1.05;color:#26221F;">Upload your sentiment data</div>
+      <div style="margin-top:12px;font-size:14px;color:#91887E;line-height:1.6;">Upload a CSV containing customer feedback to generate your sentiment intelligence dashboard.</div>
     </div>
-    <span class="brand-name">Sensecap</span>
-  </div>
+    """)
 
-  <!-- Headline -->
-  <div class="headline-block">
-    <div class="headline">Upload your sentiment data</div>
-    <div class="subline">Upload a CSV containing customer feedback to generate your sentiment intelligence dashboard.</div>
-  </div>
+    _, col, _ = st.columns([1, 2, 1])
+    with col:
+        uploaded = st.file_uploader(
+            "Drop your CSV here or click to browse",
+            type=["csv"],
+            help="Requires at least: platform, text, timestamp columns.",
+        )
 
-  <!-- Upload card -->
-  <div class="upload-card" id="uploadCard">
-    <div class="upload-icon-wrap">
-      <svg width="26" height="26" viewBox="0 0 24 24" fill="none"
-           stroke="#F47A20" stroke-width="1.8"
-           stroke-linecap="round" stroke-linejoin="round">
-        <polyline points="16 16 12 12 8 16"/>
-        <line x1="12" y1="12" x2="12" y2="21"/>
-        <path d="M20.39 18.39A5 5 0 0 0 18 9h-1.26A8 8 0 1 0 3 16.3"/>
-      </svg>
+    st.html("""
+    <div style="text-align:center;margin-top:16px;font-family:Inter,-apple-system,sans-serif;">
+      <div style="font-size:11px;font-weight:500;color:#B5AFA8;letter-spacing:.5px;text-transform:uppercase;margin-bottom:10px;">Supported fields</div>
+      <div style="display:flex;flex-wrap:wrap;justify-content:center;gap:7px;">
+        <span style="padding:5px 13px;border-radius:999px;background:#F4F0EA;border:1px solid #E9E3DA;color:#756E66;font-size:11px;">platform</span>
+        <span style="padding:5px 13px;border-radius:999px;background:#F4F0EA;border:1px solid #E9E3DA;color:#756E66;font-size:11px;">text</span>
+        <span style="padding:5px 13px;border-radius:999px;background:#F4F0EA;border:1px solid #E9E3DA;color:#756E66;font-size:11px;">timestamp</span>
+        <span style="padding:5px 13px;border-radius:999px;background:#F4F0EA;border:1px solid #E9E3DA;color:#756E66;font-size:11px;">sentiment</span>
+        <span style="padding:5px 13px;border-radius:999px;background:#F4F0EA;border:1px solid #E9E3DA;color:#756E66;font-size:11px;">theme</span>
+        <span style="padding:5px 13px;border-radius:999px;background:#F4F0EA;border:1px solid #E9E3DA;color:#756E66;font-size:11px;">region</span>
+      </div>
     </div>
-    <div class="drop-text">Drop your CSV here</div>
-    <div class="or-divider">or</div>
-    <button class="browse-btn" id="browseBtn">
-      <svg width="13" height="13" viewBox="0 0 24 24" fill="none"
-           stroke="currentColor" stroke-width="2"
-           stroke-linecap="round" stroke-linejoin="round">
-        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
-        <polyline points="17 8 12 3 7 8"/>
-        <line x1="12" y1="3" x2="12" y2="15"/>
-      </svg>
-      Browse files
-    </button>
-  </div>
+    """)
 
-  <!-- Supported fields -->
-  <div class="fields-block">
-    <div class="fields-label">Supported fields</div>
-    <div class="pills">
-      <span class="pill">platform</span>
-      <span class="pill">text</span>
-      <span class="pill">timestamp</span>
-      <span class="pill">sentiment</span>
-      <span class="pill">theme</span>
-      <span class="pill">region</span>
-    </div>
-  </div>
-
-</div>
-
-<script>
-  // Wire our card/button to the hidden Streamlit file input
-  function getFileInput() {
-    var p = window.parent ? window.parent.document : document;
-    return p.querySelector('[data-testid="stFileUploaderDropzone"] input[type="file"]');
-  }
-
-  function triggerUpload() {
-    var inp = getFileInput();
-    if (inp) inp.click();
-  }
-
-  document.getElementById('browseBtn').addEventListener('click', function(e) {
-    e.stopPropagation();
-    triggerUpload();
-  });
-  document.getElementById('uploadCard').addEventListener('click', function() {
-    triggerUpload();
-  });
-
-  // Drag-over highlight
-  var card = document.getElementById('uploadCard');
-  card.addEventListener('dragover', function(e) {
-    e.preventDefault();
-    card.classList.add('drag-over');
-  });
-  card.addEventListener('dragleave', function() {
-    card.classList.remove('drag-over');
-  });
-  card.addEventListener('drop', function(e) {
-    e.preventDefault();
-    card.classList.remove('drag-over');
-    // Forward the dropped file to the hidden Streamlit input
-    var inp = getFileInput();
-    if (inp && e.dataTransfer.files.length) {
-      var dt = new DataTransfer();
-      dt.items.add(e.dataTransfer.files[0]);
-      inp.files = dt.files;
-      inp.dispatchEvent(new Event('change', { bubbles: true }));
-    }
-  });
-</script>
-</body>
-</html>
-    """, height=620)
-
-    # Hidden but functional Streamlit file uploader
-    uploaded = st.file_uploader(
-        "Upload CSV", type=["csv"], label_visibility="hidden",
-        help="Upload a CSV with at least platform, text and timestamp columns.",
-    )
     if uploaded is not None:
         with st.spinner("Loading dataset…"):
             source = pd.read_csv(uploaded, parse_dates=["timestamp"])
+            st.session_state["audience_preferences"] = _extract_audience_preferences(source)
             st.session_state["df"] = normalize(source)
             st.session_state["uploaded_name"] = uploaded.name
         st.rerun()
@@ -558,6 +260,7 @@ if st.session_state["df"] is None:
 
 df = st.session_state["df"]
 cs_mode = st.session_state["clipsense_mode"]
+audience_prefs = st.session_state.get("audience_preferences") or {}
 
 # Inject full-bleed CSS directly into <head> via JS — the only reliable way
 # to override Streamlit's JS-injected layout styles.
@@ -1691,7 +1394,7 @@ with tabs[0]:
     pos_count = int((fdf["sentiment_label"] == "Positive").sum())
 
     with left:
-        components.html(f"""
+        st.html(f"""
 <style>
   *{{box-sizing:border-box;margin:0;padding:0}}
   body{{background:transparent;font-family:Inter,-apple-system,sans-serif;color:#fff;overflow:hidden}}
@@ -1819,7 +1522,7 @@ with tabs[0]:
 
   <div class='regions'>{top_region_html}</div>
 </div>
-        """, height=620, scrolling=False)
+        """)
 
     with right:
         # ── dynamic insight values ────────────────────────────────────────────
@@ -1834,7 +1537,7 @@ with tabs[0]:
         sub_line = (
             f"{positive:.1f}% positive across {fmt_k(total)} mentions."
         )
-        components.html(f"""
+        st.html(f"""
 <style>
   *{{box-sizing:border-box;margin:0;padding:0}}
   body{{
@@ -2032,7 +1735,7 @@ with tabs[0]:
 
   <div class='cta z'>View detailed analysis &rarr;</div>
 </div>
-        """, height=620, scrolling=False)
+        """)
 
     st.markdown("<div style='height:20px;line-height:0'>&nbsp;</div>", unsafe_allow_html=True)
 
@@ -2402,6 +2105,56 @@ with tabs[2]:
 </div>""", height=520, scrolling=False)
         else:
             st.info("No topic/theme data available in this dataset.")
+
+        # ── Audience Preferences panel ────────────────────────────────────────
+        _ap_liked       = audience_prefs.get("liked", [])
+        _ap_disliked    = audience_prefs.get("disliked", [])
+        _ap_requests    = audience_prefs.get("recurring_requests", [])
+        _ap_complaints  = audience_prefs.get("recurring_complaints", [])
+        _ap_praise      = audience_prefs.get("recurring_praise", [])
+        _has_ap = any([_ap_liked, _ap_disliked, _ap_requests, _ap_complaints, _ap_praise])
+
+        if _has_ap:
+            st.markdown("<div style='height:20px;line-height:0'>&nbsp;</div>", unsafe_allow_html=True)
+
+            def _ap_items_html(items, dot_color):
+                if not items:
+                    return f"<div style='font-size:12px;color:{MUTED};font-style:italic;'>None detected</div>"
+                return "".join(
+                    f"<div style='display:flex;align-items:flex-start;gap:8px;padding:6px 0;"
+                    f"border-top:1px solid {BORDER};font-size:12px;color:{TEXT};line-height:1.5;'>"
+                    f"<span style='width:7px;height:7px;border-radius:50%;background:{dot_color};"
+                    f"flex-shrink:0;margin-top:4px;'></span>"
+                    f"<span>{html.escape(str(item))}</span></div>"
+                    for item in items
+                )
+
+            _ap_sections = [
+                ("What Audiences Liked",       _ap_liked,      ORANGE),
+                ("What Audiences Disliked",     _ap_disliked,   DARK),
+                ("Recurring Requests",          _ap_requests,   BLUE),
+                ("Recurring Complaints",        _ap_complaints, "#E7B545"),
+                ("Recurring Praise",            _ap_praise,     GREEN),
+            ]
+
+            ap_cols = st.columns(len(_ap_sections), gap="medium")
+            for col, (title, items, dot_color) in zip(ap_cols, _ap_sections):
+                with col:
+                    components.html(f"""
+<style>
+  *{{box-sizing:border-box;margin:0;padding:0}}
+  html,body{{height:100%;background:transparent;font-family:Inter,-apple-system,sans-serif;overflow:hidden}}
+  .card{{background:#fff;border:1px solid {BORDER};border-radius:16px;
+         padding:20px 20px 16px;box-shadow:0 2px 12px rgba(50,40,30,.07);
+         display:flex;flex-direction:column;}}
+  .title{{font-size:12px;font-weight:680;color:{TEXT};letter-spacing:-.1px}}
+  .divider{{height:1px;background:{BORDER};margin:10px 0 6px;flex-shrink:0}}
+</style>
+<div class="card">
+  <div class="title">{html.escape(title)}</div>
+  <div class="divider"></div>
+  {_ap_items_html(items, dot_color)}
+</div>""", height=max(120, 60 + len(items) * 38), scrolling=False)
     else:
         # ── Normal mode: ROI Analysis ─────────────────────────────────────────
         st.markdown(

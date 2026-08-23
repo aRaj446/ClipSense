@@ -55,7 +55,6 @@ export default function SmartAnalyticsDashboard({ job }: Props) {
         <span className="text-slate-300 font-medium truncate">{job.comments_name}</span>
         <button
           onClick={() => {
-            const base = import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:8000'
             const sensecap = import.meta.env.VITE_SENSECAP_URL ?? 'http://localhost:8501'
             const csvUrl = smartTrailerService.exportCsvUrl(job.id)
             const params = new URLSearchParams({ dataset_url: csvUrl, source: 'clipsense', dataset_name: job.comments_name })

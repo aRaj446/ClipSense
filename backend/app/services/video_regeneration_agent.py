@@ -83,6 +83,71 @@ def _snap_to_scene(
     return best["start_time"], best["end_time"]
 
 
+# ── Strategy interpreter ──────────────────────────────────────────────────────
+
+# Keyword groups mapped to topic/mood signals already present in the analytics.
+# Each entry: (signal_keywords, topic_boost, sentiment_boost, pacing_short)
+#   topic_boost:     added to topic_weight for matching topics
+#   sentiment_boost: added when candidate sentiment matches
+#   pacing_short:    True = prefer shorter clips (fast pacing intent)
+_STRATEGY_RULES: list[tuple[tuple[str, ...], float, float, bool]] = [
+    # High energy / action
+    (("high-energy", "high energy", "action", "fast", "intense", "explosive", "dynamic"),
+     0.6, 0.3, True),
+    # Emotional / character
+    (("emotional", "emotion", "character", "heartfelt", "touching", "intimate", "personal"),
+     0.5, 0.2, False),
+    # Reduce slow / exposition
+    (("reduce slow", "less slow", "cut slow", "avoid slow", "reduce exposition",
+      "less exposition", "cut exposition", "avoid exposition"),
+     -0.5, -0.3, True),
+    # Suspense / tension
+    (("suspense", "tension", "thriller", "mystery", "tense", "gripping"),
+     0.4, 0.2, False),
+    # Pacing — fast
+    (("fast pacing", "fast-paced", "snappy", "quick cuts", "rapid"),
+     0.0, 0.0, True),
+    # Pacing — slow
+    (("slow pacing", "slower", "relaxed", "gentle", "calm"),
+     0.0, 0.0, False),
+]
+
+
+def _parse_strategy(strategy_text: str | None) -> dict:
+    """
+    Parse a free-form strategy string into scoring modifiers.
+
+    Returns a dict:
+        topic_boosts:    dict[str, float]  — per-topic additive weight
+        sentiment_boost: float             — added when candidate is Positive/Praise
+        prefer_short:    bool              — prefer clips < 10s
+        raw_labels:      list[str]         — human-readable summary
+    """
+    result = {
+        "topic_boosts":    {},
+        "sentiment_boost": 0.0,
+        "prefer_short":    False,
+        "raw_labels":      [],
+    }
+    if not strategy_text or not strategy_text.strip():
+        return result
+
+    text = strategy_text.lower()
+    for keywords, topic_boost, sentiment_boost, pacing_short in _STRATEGY_RULES:
+        for kw in keywords:
+            if kw in text:
+                result["sentiment_boost"] += sentiment_boost
+                if pacing_short:
+                    result["prefer_short"] = True
+                label = kw.replace("-", " ").title()
+                if label not in result["raw_labels"]:
+                    result["raw_labels"].append(label)
+                break  # one match per rule group is enough
+
+    result["sentiment_boost"] = max(-1.0, min(1.0, result["sentiment_boost"]))
+    return result
+
+
 # ── Deterministic clip planner ────────────────────────────────────────────────
 
 def _build_plans(
@@ -90,66 +155,105 @@ def _build_plans(
     video_duration: float,
     shot_boundaries: list[dict],
     beats: list[float],
+    strategy_text: str | None = None,
 ) -> list[dict]:
     """
     Build one clip plan per platform using engagement-weighted scoring.
-    Candidate timestamps are snapped to the nearest strong beat so cuts
-    land on musical accents rather than arbitrary positions.
+
+    When strategy_text is provided, a strategy_score layer is added on top of
+    the base engagement weight. The strategy never replaces audience signal —
+    it only adjusts the ordering within the existing candidate pool.
+
+    Scoring layers (additive):
+        base_weight      = (engagement_score + 1.0) * avg_confidence  [0.0 – 2.0]
+        strategy_score   = sentiment_boost when candidate matches strategy intent
+                         + prefer_short bonus for clips < 10s
+                         (bounded to ±0.5 total so audience signal always dominates)
     """
     from app.utils.beat_detector import find_nearest_beat
+
+    # Parse strategy modifiers (no-op when strategy_text is None)
+    strat = _parse_strategy(strategy_text)
+
     # Build engagement weight per topic from Stage 2 engagement_score
-    # engagement_score is already (positive - negative) / total in [-1.0, 1.0]
-    # Multiply by avg_confidence to further weight high-certainty topics
     topic_weight: dict[str, float] = {
         tb.topic: round((tb.engagement_score + 1.0) * tb.avg_confidence, 4)
         for tb in analytics.topic_breakdown
     }
 
-    # Collect timestamped candidates, weighted by topic engagement
-    candidates = sorted(
-        [p for p in analytics.timeline if p.timestamp],
-        key=lambda x: topic_weight.get(x.topic, 0.0) * x.confidence,
+    def _candidate_score(point, clip_len: float) -> float:
+        base = topic_weight.get(point.topic, 0.0) * point.confidence
+        if not strategy_text:
+            return base
+        # Strategy layer — bounded to ±0.5 so audience signal always dominates
+        s_score = 0.0
+        if point.sentiment in _POSITIVE_SENTIMENTS:
+            s_score += strat["sentiment_boost"]
+        if strat["prefer_short"] and clip_len < 10.0:
+            s_score += 0.2
+        return base + max(-0.5, min(0.5, s_score))
+
+    # Collect timestamped candidates
+    raw_candidates = [p for p in analytics.timeline if p.timestamp]
+
+    # Pre-compute scene windows so we can use clip_len in scoring
+    candidate_scenes: list[tuple] = []
+    for point in raw_candidates:
+        secs = _mm_ss_to_seconds(point.timestamp)
+        if secs is None:
+            continue
+        secs_snapped = find_nearest_beat(secs, beats, tolerance=0.5)
+        start, end   = _snap_to_scene(secs_snapped, shot_boundaries, video_duration)
+        candidate_scenes.append((point, start, end))
+
+    # Sort by composite score descending
+    candidate_scenes.sort(
+        key=lambda x: _candidate_score(x[0], x[2] - x[1]),
         reverse=True,
     )
 
-    # Prefer positive candidates; fall back to all if none exist
-    positive_candidates = [c for c in candidates if c.sentiment in _POSITIVE_SENTIMENTS]
-    if positive_candidates:
-        candidates = positive_candidates + [c for c in candidates if c not in positive_candidates]
+    # Prefer positive candidates first (audience signal > strategy)
+    positive_cs = [x for x in candidate_scenes if x[0].sentiment in _POSITIVE_SENTIMENTS]
+    other_cs    = [x for x in candidate_scenes if x[0].sentiment not in _POSITIVE_SENTIMENTS]
+    candidate_scenes = positive_cs + other_cs
 
     # Deduplicate by timestamp
     seen_ts: set[str] = set()
     deduped = []
-    for p in candidates:
-        if p.timestamp not in seen_ts:
-            seen_ts.add(p.timestamp)
-            deduped.append(p)
-    candidates = deduped
+    for item in candidate_scenes:
+        ts = item[0].timestamp
+        if ts not in seen_ts:
+            seen_ts.add(ts)
+            deduped.append(item)
+    candidate_scenes = deduped
+
+    # Build strategy rationale suffix
+    strategy_note = ""
+    if strategy_text and strat["raw_labels"]:
+        strategy_note = " Strategy applied: " + " · ".join(strat["raw_labels"]) + "."
 
     plans = []
     for platform, spec in PLATFORM_SPECS.items():
         clips = []
         total = 0.0
 
-        for point in candidates:
-            secs = _mm_ss_to_seconds(point.timestamp)
-            if secs is None:
-                continue
-            # Snap candidate timestamp to nearest beat for musical cut alignment
-            secs = find_nearest_beat(secs, beats, tolerance=0.5)
-            start, end = _snap_to_scene(secs, shot_boundaries, video_duration)
+        for point, start, end in candidate_scenes:
             clip_len = end - start
-            # Enforce 6s minimum at planning stage too
             if clip_len < 6.0 or total + clip_len > spec["max_duration"]:
                 continue
+            score = _candidate_score(point, clip_len)
             clips.append({
-                "start_time": round(start, 2),
-                "end_time":   round(end, 2),
-                "reason":     f"Audience responded positively to {point.topic} "
-                              f"(engagement={topic_weight.get(point.topic, 0):.2f})",
-                "topic":      point.topic,
-                "sentiment":  point.sentiment,
-                "platform":   platform,
+                "start_time":       round(start, 2),
+                "end_time":         round(end, 2),
+                "reason":           (
+                    f"Audience responded positively to {point.topic} "
+                    f"(score={score:.2f})"
+                    + (f"; {strategy_note.strip()}" if strategy_note else "")
+                ),
+                "topic":            point.topic,
+                "sentiment":        point.sentiment,
+                "platform":         platform,
+                "strategy_score":   round(max(-0.5, min(0.5, score - topic_weight.get(point.topic, 0.0) * point.confidence)), 3),
             })
             total += clip_len
 
@@ -166,6 +270,7 @@ def _build_plans(
             "rationale":       (
                 f"Engagement-weighted plan for {platform}: "
                 f"{len(clips)} clips selected from highest-scoring topics."
+                + strategy_note
             ),
         })
 
@@ -200,6 +305,7 @@ class VideoRegenerationAgent:
         video_duration: float,
         target_duration: float = 60.0,
         job_id: str | None = None,
+        strategy_text: str | None = None,
     ) -> tuple[str | None, TrailerEditingPlan | None, str | None, str | None, float | None, bool, str | None]:
 
         _key = job_id or project_id  # use job_id for progress so SSE reads the right key
@@ -215,16 +321,28 @@ class VideoRegenerationAgent:
         # Initialise progress steps (only if not already set by the API layer)
         from app.utils.render_progress import set_progress, init_steps, set_step, get_progress
         _STEPS = [
-            {"key": "scenes",     "label": "Detecting scenes",       "status": "pending", "percent": 0},
-            {"key": "transcript", "label": "Transcribing audio",      "status": "pending", "percent": 0},
-            {"key": "beats",      "label": "Analysing beat rhythm",   "status": "pending", "percent": 0},
-            {"key": "planning",   "label": "Planning clip selection", "status": "pending", "percent": 0},
-            {"key": "extracting", "label": "Extracting clips",        "status": "pending", "percent": 0},
-            {"key": "composing",  "label": "Composing transitions",   "status": "pending", "percent": 0},
-            {"key": "normalising","label": "Normalising audio",       "status": "pending", "percent": 0},
+            {"key": "strategy",   "label": "Loading strategy",        "status": "pending", "percent": 0},
+            {"key": "scenes",     "label": "Detecting scenes",         "status": "pending", "percent": 0},
+            {"key": "transcript", "label": "Transcribing audio",       "status": "pending", "percent": 0},
+            {"key": "beats",      "label": "Analysing beat rhythm",    "status": "pending", "percent": 0},
+            {"key": "planning",   "label": "Planning clip selection",  "status": "pending", "percent": 0},
+            {"key": "extracting", "label": "Extracting clips",         "status": "pending", "percent": 0},
+            {"key": "composing",  "label": "Composing transitions",    "status": "pending", "percent": 0},
+            {"key": "normalising","label": "Normalising audio",        "status": "pending", "percent": 0},
         ]
         if not (get_progress(_key) or {}).get("steps"):
             set_progress(_key, "preprocessing", 0, "Starting pipeline", steps=_STEPS)
+
+        # Strategy step — resolve and log before heavy pre-processing
+        set_step(_key, "strategy", "active", 0, "Loading trailer strategy…", overall_percent=1)
+        if strategy_text and strategy_text.strip():
+            strat_parsed = _parse_strategy(strategy_text)
+            strat_labels = " · ".join(strat_parsed["raw_labels"]) if strat_parsed["raw_labels"] else "custom strategy"
+            set_step(_key, "strategy", "done", 100, f"Strategy loaded: {strat_labels}", overall_percent=2)
+            logger.info("VideoRegenerationAgent: strategy loaded — %s", strat_labels)
+        else:
+            set_step(_key, "strategy", "done", 100, "No strategy — using default scoring", overall_percent=2)
+            logger.info("VideoRegenerationAgent: no strategy provided — default scoring")
 
         # Stage 1 — parallel pre-processing
         set_step(_key, "scenes",     "active", 0, "Detecting shot boundaries…", overall_percent=2)
@@ -251,7 +369,7 @@ class VideoRegenerationAgent:
 
         # Stage 2 — deterministic clip planning
         set_step(_key, "planning", "active", 0, "Scoring and selecting clips…", overall_percent=30)
-        plans    = _build_plans(analytics, video_duration, shot_boundaries, beat_data.get("beats", []))
+        plans    = _build_plans(analytics, video_duration, shot_boundaries, beat_data.get("beats", []), strategy_text=strategy_text)
         best_raw = _select_best_plan(plans)
 
         if not best_raw or not best_raw.get("clips"):

@@ -194,8 +194,18 @@ export interface PipelineStep {
   action?: () => void   // navigation callback, only set when a real route exists
 }
 
+// ── Trailer Strategy ────────────────────────────────────────────────────────
+
+export interface TrailerStrategy {
+  dataset_id:         string
+  generated_strategy: string
+  user_strategy:      string
+  updated_at:         string
+}
+
 export interface SmartTrailerJob {
   id: string
+  project_id: string | null
   raw_footage_name: string
   sample_trailer_name: string
   comments_name: string

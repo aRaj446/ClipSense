@@ -9,6 +9,7 @@ import { StoredDataset, TrailerJob } from '../types/analysis'
 import { trailerService } from '../services/trailerService'
 import { useToast } from '../context/ToastContext'
 import Button from './Button'
+import Modal from './Modal'
 import JobProgressPanel, { ProgressStep } from './JobProgressPanel'
 
 const POLL_INTERVAL_MS = 3000
@@ -141,12 +142,14 @@ export default function TrailerPanel({ projectId, datasets }: Props) {
   const { toast }  = useToast()
   const navigate   = useNavigate()
 
-  const [selectedDs,  setSelectedDs]  = useState<string>('')
-  const [jobs,        setJobs]        = useState<TrailerJob[]>([])
-  const [loadingJobs, setLoadingJobs] = useState(true)
-  const [generating,  setGenerating]  = useState(false)
-  const [activeJobId, setActiveJobId] = useState<string | null>(null)
-  const [progress,    setProgress]    = useState<{ stage: string; percent: number; message: string; steps: ProgressStep[] } | null>(null)
+  const [selectedDs,    setSelectedDs]    = useState<string>('')
+  const [jobs,          setJobs]          = useState<TrailerJob[]>([])
+  const [loadingJobs,   setLoadingJobs]   = useState(true)
+  const [generating,    setGenerating]    = useState(false)
+  const [activeJobId,   setActiveJobId]   = useState<string | null>(null)
+  const [progress,      setProgress]      = useState<{ stage: string; percent: number; message: string; steps: ProgressStep[] } | null>(null)
+  const [confirmDelete, setConfirmDelete] = useState<string | null>(null)
+  const [deleting,      setDeleting]      = useState(false)
   const pollRef     = useRef<ReturnType<typeof setInterval> | null>(null)
   const sseUnsubRef = useRef<(() => void) | null>(null)
 
@@ -236,11 +239,14 @@ export default function TrailerPanel({ projectId, datasets }: Props) {
   }
 
   async function handleDelete(jobId: string) {
+    setDeleting(true)
     try {
       await trailerService.deleteJob(jobId)
       setJobs(prev => prev.filter(j => j.id !== jobId))
+      setConfirmDelete(null)
       toast('Trailer deleted.')
     } catch { toast('Failed to delete trailer.', 'error') }
+    finally { setDeleting(false) }
   }
 
   return (
@@ -381,10 +387,11 @@ export default function TrailerPanel({ projectId, datasets }: Props) {
                       </button>
                     )}
                     {(job.status === 'done' || job.status === 'failed') && (
-                      <button onClick={() => handleDelete(job.id)}
+                      <button
+                        onClick={() => setConfirmDelete(job.id)}
                         className="p-1.5 rounded-lg transition-colors"
-                        style={{ color: '#5C5A72', background: 'transparent' }}
-                        title="Delete">
+                        style={{ color: '#5C5A72' }}
+                        title="Delete trailer">
                         <Trash2 size={13} />
                       </button>
                     )}
@@ -462,6 +469,19 @@ export default function TrailerPanel({ projectId, datasets }: Props) {
           <p className="text-sm font-semibold mb-1" style={{ color: '#F0EDE8' }}>No trailers yet</p>
           <p className="text-xs" style={{ color: '#5C5A72' }}>Select a dataset above and generate your first trailer.</p>
         </div>
+      )}
+
+      {/* ── Delete confirmation modal ── */}
+      {confirmDelete && (
+        <Modal open title="Delete Trailer" onClose={() => setConfirmDelete(null)}>
+          <p className="text-sm mb-6" style={{ color: '#A8A4B8' }}>
+            This will permanently remove the video file. This action cannot be undone.
+          </p>
+          <div className="flex gap-3 justify-end">
+            <Button variant="ghost" onClick={() => setConfirmDelete(null)}>Cancel</Button>
+            <Button variant="danger" loading={deleting} onClick={() => handleDelete(confirmDelete)}>Delete</Button>
+          </div>
+        </Modal>
       )}
     </div>
   )

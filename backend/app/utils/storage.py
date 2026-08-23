@@ -31,11 +31,27 @@ from contextlib import contextmanager
 
 logger = logging.getLogger(__name__)
 
-UPLOAD_DIR        = "app/uploads"
-METADATA_DIR      = "app/metadata"
-TRAILERS_DIR      = "app/trailers"
-SMART_UPLOAD_DIR  = "app/uploads/smart"
-DB_PATH           = "app/clipsense.db"
+UPLOAD_DIR           = "app/uploads"
+METADATA_DIR         = "app/metadata"
+TRAILERS_DIR         = "app/trailers"
+SMART_UPLOAD_DIR     = "app/uploads/smart"
+PROJECT_UPLOAD_DIR   = "app/uploads/projects"   # per-project dirs: {PROJECT_UPLOAD_DIR}/{project_id}/
+DB_PATH              = "app/clipsense.db"
+
+
+def project_generations_dir(project_id: str) -> str:
+    """
+    Return (and create) the generations directory for a project.
+
+    Layout: app/uploads/projects/{project_id}/generations/
+
+    Each generation writes its output as {job_id}.mp4 inside this directory
+    so outputs are project-scoped and never overwrite each other.
+    """
+    path = os.path.join(PROJECT_UPLOAD_DIR, project_id, "generations")
+    os.makedirs(path, exist_ok=True)
+    return path
+
 
 # Root directory for per-job workspaces.
 # Override via WORKSPACE_ROOT env var on EC2 to point at a fast EBS volume.
@@ -52,10 +68,11 @@ def _workspace_root() -> str:
 
 
 def ensure_directories():
-    os.makedirs(UPLOAD_DIR,       exist_ok=True)
-    os.makedirs(METADATA_DIR,     exist_ok=True)
-    os.makedirs(TRAILERS_DIR,     exist_ok=True)
-    os.makedirs(SMART_UPLOAD_DIR, exist_ok=True)
+    os.makedirs(UPLOAD_DIR,         exist_ok=True)
+    os.makedirs(METADATA_DIR,       exist_ok=True)
+    os.makedirs(TRAILERS_DIR,       exist_ok=True)
+    os.makedirs(SMART_UPLOAD_DIR,   exist_ok=True)
+    os.makedirs(PROJECT_UPLOAD_DIR, exist_ok=True)
 
 
 # ── MediaStorage ──────────────────────────────────────────────────────────────

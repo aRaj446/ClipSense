@@ -108,6 +108,11 @@ def test_sensecap_cs_columns_stable_order():
         "sentiment_score",
         "theme",
         "confidence",
+        "ap_liked",
+        "ap_disliked",
+        "ap_recurring_requests",
+        "ap_recurring_complaints",
+        "ap_recurring_praise",
     ]
 
 

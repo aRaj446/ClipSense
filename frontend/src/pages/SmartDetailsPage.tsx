@@ -259,13 +259,13 @@ export default function SmartDetailsPage({ jobId, onBack }: Props) {
         {/* ── Analysis Report — smart-only section below datasets ── */}
         <AnalysisReport report={job.analysis_report} />
 
+        {/* ── V1 vs V2 Comparison — side-by-side original sample vs generated trailer ── */}
+        <TrailerComparisonPanel job={job} />
+
         {/* ── Sentiment → Output Validation — maps each clip back to the sentiment
              analysis that caused it to be selected. Answers leadership's question:
              "how do you validate the sentiment is met with the output?" ── */}
         <SentimentValidationPanel job={job} />
-
-        {/* ── V1 vs V2 Comparison — side-by-side original sample vs generated trailer ── */}
-        <TrailerComparisonPanel job={job} />
 
         {/* ── Time Saved — computed from actual job timestamps + editing plan ── */}
         <TimeSavedCard job={job} />

@@ -24,6 +24,7 @@ function VideoPane({
   badgeColor,
   videoRef,
   onTimeUpdate,
+  controls,
 }: {
   src: string
   label: string
@@ -31,10 +32,10 @@ function VideoPane({
   badgeColor: string
   videoRef: React.RefObject<HTMLVideoElement | null>
   onTimeUpdate?: () => void
+  controls?: boolean
 }) {
   return (
     <div className="flex flex-col gap-2">
-      {/* Label row */}
       <div className="flex items-center gap-2">
         <span className="text-xs font-semibold" style={{ color: '#F0EDE8' }}>
           {label}
@@ -56,7 +57,8 @@ function VideoPane({
         className="w-full rounded-xl object-contain bg-black"
         style={{ maxHeight: 280, border: '1px solid #1E1E30' }}
         preload="metadata"
-        muted
+        controls={controls}
+        muted={!controls}
         playsInline
         onTimeUpdate={onTimeUpdate}
       />
@@ -86,13 +88,18 @@ export default function TrailerComparisonPanel({ job }: Props) {
   const togglePlay = useCallback(() => {
     setPlaying(p => {
       const next = !p
-      ;[v1Ref.current, v2Ref.current].forEach(v => {
-        if (!v) return
-        next ? v.play().catch(() => {}) : v.pause()
-      })
+      if (synced) {
+        ;[v1Ref.current, v2Ref.current].forEach(v => {
+          if (!v) return
+          next ? v.play().catch(() => {}) : v.pause()
+        })
+      } else {
+        const v = v2Ref.current
+        if (v) next ? v.play().catch(() => {}) : v.pause()
+      }
       return next
     })
-  }, [])
+  }, [synced])
 
   const seekTo = useCallback(
     (t: number) => {
@@ -170,6 +177,7 @@ export default function TrailerComparisonPanel({ job }: Props) {
             badge="V1 · Original"
             badgeColor="#A8A4B8"
             videoRef={v1Ref}
+            controls={!synced}
           />
         ) : (
           <div
@@ -188,12 +196,13 @@ export default function TrailerComparisonPanel({ job }: Props) {
           badge="V2 · AI Generated"
           badgeColor="#D4A843"
           videoRef={v2Ref}
-          onTimeUpdate={handleV2TimeUpdate}
+          onTimeUpdate={synced ? handleV2TimeUpdate : undefined}
+          controls={!synced}
         />
       </div>
 
-      {/* Shared playback controls */}
-      <div className="flex items-center gap-3">
+      {/* Shared playback controls — synced mode only */}
+      {synced && <div className="flex items-center gap-3">
         <button
           onClick={togglePlay}
           className="flex items-center justify-center w-8 h-8 rounded-full shrink-0 transition-colors"
@@ -248,7 +257,7 @@ export default function TrailerComparisonPanel({ job }: Props) {
         <span className="text-xs font-mono shrink-0 w-10" style={{ color: '#5C5A72' }}>
           {fmt(Math.round(v2Duration))}
         </span>
-      </div>
+      </div>}
 
       {/* V2 clip sentiment strip */}
       {clips.length > 0 && totalDur > 0 && (

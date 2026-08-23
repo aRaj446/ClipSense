@@ -98,12 +98,13 @@ function TrailerCard({ job, winnerMap }: {
   winnerMap: Record<string, string>
 }) {
   const [hovered, setHovered] = useState(false)
-  const isSmart  = !('project_id' in job)
+  // SmartTrailerJob has raw_footage_name; TrailerJob does not
+  const isSmart  = 'raw_footage_name' in job
   const meta     = job.platform ? PLATFORM_META[job.platform] : null
   const isWinner = !isSmart && winnerMap[(job as TrailerJob).project_id] === job.id
-  const videoUrl = isSmart
-    ? smartTrailerService.trailerUrl(job.output_url!)
-    : trailerService.trailerUrl((job as TrailerJob).output_url!)
+  // All output_url values are backend-relative paths — always prepend base URL
+  const base     = import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:8000'
+  const videoUrl = `${base}${job.output_url!}`
 
   return (
     <div
@@ -288,9 +289,12 @@ export default function Dashboard() {
   const filteredSmart    = activeTab === 'all' ? allSmartTrailers : []
   const totalTrailers    = allTrailers.length + allSmartTrailers.length
 
+  // Videos uploaded = raw footage files across all projects (each project has 1 raw + 1 sample = 2 videos)
+  const videosUploaded = projects.reduce((sum, p) => sum + (p.raw_footage_name ? 2 : 1), 0)
+
   const stats = [
     { label: 'Total Projects',     value: projects.length, icon: <FolderOpen    size={20} style={{ color: '#D4A843' }} />, accentColor: '#D4A843' },
-    { label: 'Videos Uploaded',    value: projects.length, icon: <Video         size={20} style={{ color: '#8B7CF6' }} />, accentColor: '#8B7CF6' },
+    { label: 'Videos Uploaded',    value: videosUploaded,  icon: <Video         size={20} style={{ color: '#8B7CF6' }} />, accentColor: '#8B7CF6' },
     { label: 'Trailers Generated', value: totalTrailers,   icon: <Clapperboard  size={20} style={{ color: '#2DD4BF' }} />, accentColor: '#2DD4BF' },
   ]
 

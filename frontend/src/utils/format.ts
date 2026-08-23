@@ -16,7 +16,9 @@ export function formatDuration(seconds: number | null): string {
 }
 
 export function formatDate(iso: string): string {
-  return new Date(iso).toLocaleDateString('en-US', {
+  // Append Z if no timezone info so the browser treats it as UTC, not local time
+  const normalized = iso.endsWith('Z') || iso.includes('+') ? iso : iso + 'Z'
+  return new Date(normalized).toLocaleDateString('en-US', {
     year: 'numeric',
     month: 'short',
     day: 'numeric',

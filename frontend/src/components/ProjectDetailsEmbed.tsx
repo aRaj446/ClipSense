@@ -88,7 +88,11 @@ export default function ProjectDetailsEmbed({ projectId, onBack }: Props) {
   }
 
   const ext = project.filename.split('.').pop()?.toLowerCase() ?? 'mp4'
-  const videoUrl = `${API_BASE}/uploads/${project.id}.${ext}`
+  // Phase 2 projects store raw footage at uploads/projects/{id}/raw.{ext}
+  // Legacy single-file uploads store at uploads/{id}.{ext}
+  const videoUrl = project.raw_footage_name
+    ? `${API_BASE}/uploads/projects/${project.id}/raw.${ext}`
+    : `${API_BASE}/uploads/${project.id}.${ext}`
   const resolution = project.width && project.height ? `${project.width}×${project.height}` : '—'
 
   return (

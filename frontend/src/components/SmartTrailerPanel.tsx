@@ -7,6 +7,8 @@ import {
 import { SmartTrailerJob, AudioSettings, DEFAULT_AUDIO_SETTINGS, TargetLufs, GenerateRequest } from '../types/analysis'
 import { smartTrailerService } from '../services/smartTrailerService'
 import { useToast } from '../context/ToastContext'
+import Modal from './Modal'
+import Button from './Button'
 import JobProgressPanel, { ProgressStep } from './JobProgressPanel'
 import DataSourceDisclaimer from './DataSourceDisclaimer'
 
@@ -202,6 +204,8 @@ export default function SmartTrailerPanel({ onSelectJob }: { onSelectJob?: (id: 
   const [progress,    setProgress]    = useState<{ stage: string; percent: number; message: string; steps: ProgressStep[] } | null>(null)
   const [retryJobId,     setRetryJobId]     = useState<string | null>(null)
   const [retryPrompt,    setRetryPrompt]    = useState('')
+  const [confirmDelete,  setConfirmDelete]  = useState<string | null>(null)
+  const [deleting,       setDeleting]       = useState(false)
   const [audioSettings,  setAudioSettings]  = useState<AudioSettings>({ ...DEFAULT_AUDIO_SETTINGS })
   const [includeSubtitles, setIncludeSubtitles] = useState(false)
   const [fastMode,       setFastMode]       = useState(false)
@@ -269,12 +273,15 @@ export default function SmartTrailerPanel({ onSelectJob }: { onSelectJob?: (id: 
   }
 
   async function handleDelete(jobId: string) {
+    setDeleting(true)
     try {
       await smartTrailerService.deleteJob(jobId)
       setJobs(prev => prev.filter(j => j.id !== jobId))
       if (retryJobId === jobId) { setRetryJobId(null); setRetryPrompt('') }
+      setConfirmDelete(null)
       toast('Job deleted.')
     } catch { toast('Failed to delete.', 'error') }
+    finally { setDeleting(false) }
   }
 
   async function handleRetry(job: SmartTrailerJob, prompt?: string) {
@@ -291,7 +298,7 @@ export default function SmartTrailerPanel({ onSelectJob }: { onSelectJob?: (id: 
     if (fastMode) req.fast_mode = true
     try {
       const started = await smartTrailerService.generate(job.id, req)
-      setJobs(prev => prev.map(j => j.id === started.id ? started : j))
+      setJobs(prev => [started, ...prev])
       setActiveJobId(started.id)
       toast(job.status === 'done' ? 'Regenerating trailer…' : 'Retrying generation…')
     } catch { toast('Failed to retry.', 'error') }
@@ -470,9 +477,10 @@ export default function SmartTrailerPanel({ onSelectJob }: { onSelectJob?: (id: 
                     )}
                     {(job.status === 'done' || job.status === 'failed') && (
                       <button
-                        onClick={e => { e.stopPropagation(); handleDelete(job.id) }}
+                        onClick={e => { e.stopPropagation(); setConfirmDelete(job.id) }}
                         className="p-1.5 rounded-lg transition-colors"
-                        style={{ color: '#5C5A72' }}>
+                        style={{ color: '#5C5A72' }}
+                        title="Delete trailer">
                         <Trash2 size={13} />
                       </button>
                     )}
@@ -689,6 +697,18 @@ export default function SmartTrailerPanel({ onSelectJob }: { onSelectJob?: (id: 
             )
           })}
         </div>
+      )}
+
+      {confirmDelete && (
+        <Modal open title="Delete Trailer" onClose={() => setConfirmDelete(null)}>
+          <p className="text-sm mb-6" style={{ color: '#A8A4B8' }}>
+            This will permanently remove the video file. This action cannot be undone.
+          </p>
+          <div className="flex gap-3 justify-end">
+            <Button variant="ghost" onClick={() => setConfirmDelete(null)}>Cancel</Button>
+            <Button variant="danger" loading={deleting} onClick={() => handleDelete(confirmDelete)}>Delete</Button>
+          </div>
+        </Modal>
       )}
     </div>
   )

@@ -37,6 +37,8 @@ class PlannedClip:
     mood_group:      str = "calm"          # action | emotional | dialogue | calm
     transcript_text: str = ""              # full transcript text for this clip segment
     energy:          float = 0.0           # normalised RMS energy [0.0–1.0]
+    muted:           bool = False          # when True, audio is silenced during render
+    speed:           float = 1.0           # playback speed multiplier (0.25–4.0)
 
 
 # ── Transcript helpers ────────────────────────────────────────────────────────
@@ -451,6 +453,7 @@ def process_clips(
             sentiment=raw.get("sentiment", "Neutral"),
             platform=raw.get("platform"),
             transcript_text=text,
+            muted=bool(raw.get("muted", False)),
         ))
 
     if not planned:

@@ -64,9 +64,14 @@ def create_tables() -> None:
     When migrating to PostgreSQL, replace this with Alembic migrations.
     """
     from app.db.base import Base
-    import app.models.feedback_dataset  # noqa: F401
-    import app.models.trailer_job       # noqa: F401
-    import app.models.smart_trailer_job # noqa: F401
+    import app.models.feedback_dataset       # noqa: F401
+    import app.models.trailer_job            # noqa: F401
+    import app.models.smart_trailer_job      # noqa: F401
+    import app.models.audience_analysis_job  # noqa: F401
+    import app.models.trailer_strategy       # noqa: F401
+    import app.models.trailer_edit           # noqa: F401
+    import app.models.smart_trailer_edit     # noqa: F401
+    import app.models.project                # noqa: F401
     Base.metadata.create_all(bind=engine)
 
     # Additive SQLite migrations — safe to run on every startup
@@ -114,6 +119,9 @@ def create_tables() -> None:
         except Exception:
             pass  # column already exists
 
+        # trailer_strategies table is created by Base.metadata.create_all above;
+        # no additive migration needed for new installs.
+
         # GPU/device metadata columns
         for _col in ("device_used", "encoder_used", "whisper_model_used"):
             try:
@@ -140,3 +148,88 @@ def create_tables() -> None:
                 "WHERE id=:id"
             ), {"r": _clean(raw, "_raw", job_id), "s": _clean(sample, "_sample", job_id), "c": _clean(comments, "_comments", job_id), "id": job_id})
         conn.commit()
+
+        # ── Phase 2 additive migrations ───────────────────────────────────────
+
+        # content_hash on feedback_datasets — enables duplicate-dataset detection
+        try:
+            conn.execute(_text("ALTER TABLE feedback_datasets ADD COLUMN content_hash VARCHAR"))
+            conn.commit()
+        except Exception:
+            pass  # column already exists
+
+        # sample_trailer_path on feedback_datasets — records which sample was used
+        try:
+            conn.execute(_text("ALTER TABLE feedback_datasets ADD COLUMN sample_trailer_path VARCHAR"))
+            conn.commit()
+        except Exception:
+            pass  # column already exists
+
+        # Unique index on (project_id, content_hash) — prevents duplicate datasets
+        # CREATE INDEX IF NOT EXISTS is safe to run on every startup
+        try:
+            conn.execute(_text(
+                "CREATE UNIQUE INDEX IF NOT EXISTS ix_feedback_datasets_project_hash "
+                "ON feedback_datasets (project_id, content_hash) "
+                "WHERE content_hash IS NOT NULL"
+            ))
+            conn.commit()
+        except Exception:
+            pass  # index already exists or SQLite version doesn't support partial index
+
+        # Backfill content_hash for existing datasets that pre-date Phase 2
+        import hashlib as _hashlib
+        existing_rows = conn.execute(_text(
+            "SELECT id, raw_text FROM feedback_datasets WHERE content_hash IS NULL AND raw_text IS NOT NULL"
+        )).fetchall()
+        for ds_id, raw_text in existing_rows:
+            if raw_text:
+                h = _hashlib.sha256(raw_text.encode("utf-8", errors="replace")).hexdigest()[:16]
+                try:
+                    conn.execute(_text(
+                        "UPDATE feedback_datasets SET content_hash=:h WHERE id=:id"
+                    ), {"h": h, "id": ds_id})
+                except Exception:
+                    pass  # duplicate hash for this project — leave null
+        conn.commit()
+
+        # ── Phase 4 additive migrations ───────────────────────────────────────
+        # project_id + dataset_id on smart_trailer_jobs — project-based generation
+        for _col in ("project_id", "dataset_id"):
+            try:
+                conn.execute(_text(f"ALTER TABLE smart_trailer_jobs ADD COLUMN {_col} VARCHAR"))
+                conn.commit()
+            except Exception:
+                pass  # column already exists
+        try:
+            conn.execute(_text(
+                "CREATE INDEX IF NOT EXISTS ix_smart_trailer_jobs_project_id "
+                "ON smart_trailer_jobs (project_id) WHERE project_id IS NOT NULL"
+            ))
+            conn.commit()
+        except Exception:
+            pass  # index already exists
+
+        # ── Phase 5 additive migrations ───────────────────────────────────────
+        # user_prompt — stores the user's expectations / creative direction per generation
+        try:
+            conn.execute(_text("ALTER TABLE smart_trailer_jobs ADD COLUMN user_prompt TEXT"))
+            conn.commit()
+        except Exception:
+            pass  # column already exists
+
+        # ── Phase 1 (SenseScrub) additive migrations ──────────────────────────
+        # smart_trailer_edits — created by Base.metadata.create_all for new installs.
+        # CREATE TABLE IF NOT EXISTS is a safe no-op on new installs and ensures
+        # the table exists on databases that pre-date this model registration.
+        try:
+            conn.execute(_text(
+                "CREATE TABLE IF NOT EXISTS smart_trailer_edits ("
+                "  job_id     TEXT PRIMARY KEY, "
+                "  plan_json  TEXT NOT NULL, "
+                "  updated_at DATETIME NOT NULL"
+                ")"
+            ))
+            conn.commit()
+        except Exception:
+            pass  # table already exists

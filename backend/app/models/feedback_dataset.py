@@ -35,12 +35,15 @@ class FeedbackDataset(Base):
     """
     __tablename__ = "feedback_datasets"
 
-    id         = Column(String, primary_key=True)
-    project_id = Column(String, nullable=False, index=True)
-    name       = Column(String, nullable=True)            # user-defined label, null until renamed
-    raw_text   = Column(Text, nullable=False)
-    source     = Column(String, default="manual_paste")  # manual_paste | file_upload | api
-    analytics_cache = Column(Text, nullable=True)         # JSON-serialised AnalyticsReport, null until first computed
+    id                  = Column(String, primary_key=True)
+    project_id          = Column(String, nullable=False, index=True)
+    name                = Column(String, nullable=True)   # user-defined label, null until renamed
+    raw_text            = Column(Text, nullable=False)
+    source              = Column(String, default="manual_paste")  # manual_paste | file_upload | file_upload_txt | project_upload
+    analytics_cache     = Column(Text, nullable=True)     # JSON-serialised AnalyticsReport, null until first computed
+    # Phase 2 additions
+    content_hash        = Column(String, nullable=True)   # sha256(raw_text)[:16] — deduplication key
+    sample_trailer_path = Column(String, nullable=True)   # path to sample trailer used at upload time
     created_at = Column(
         DateTime,
         default=lambda: datetime.now(timezone.utc),

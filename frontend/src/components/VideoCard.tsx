@@ -45,7 +45,7 @@ export default function VideoCard({ project }: Props) {
       </div>
 
       <h3 className="font-medium truncate mb-1" style={{ color: '#F0EDE8' }} title={project.filename}>
-        {project.filename}
+        {project.name || project.filename}
       </h3>
       <p className="text-xs mb-4" style={{ color: '#5C5A72' }}>{formatDate(project.upload_time)}</p>
 

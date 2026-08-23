@@ -138,6 +138,18 @@ class TopicInsight(BaseModel):
     sample_summaries: list[str]   # up to 3 representative summaries
 
 
+class AudiencePreferences(BaseModel):
+    """
+    Derived audience preference signals extracted from structured feedback.
+    Produced by the Analytics Agent alongside the main report.
+    """
+    liked: list[str]               # topics / patterns audiences responded positively to
+    disliked: list[str]            # topics / patterns audiences responded negatively to
+    recurring_requests: list[str]  # Suggestion-sentiment summaries (up to 5)
+    recurring_complaints: list[str]  # Complaint/Negative summaries (up to 5)
+    recurring_praise: list[str]    # Praise/Positive summaries (up to 5)
+
+
 class AnalyticsReport(BaseModel):
     """Power BI / Tableau-ready analytics payload produced by the Analytics Agent."""
     sentiment_distribution: dict[str, int]
@@ -147,8 +159,31 @@ class AnalyticsReport(BaseModel):
     sentiment_velocity: list[SentimentVelocityBucket]
     top_issues: list[TopicInsight]
     top_positives: list[TopicInsight]
+    audience_preferences: AudiencePreferences
     total_segments: int
     analyzed_at: str
+
+
+# ── Audience Analysis Job schemas ────────────────────────────────────────────
+
+class AudienceAnalysisJobResponse(BaseModel):
+    """API response for audience analysis job status."""
+    id: str
+    status: str                          # pending | processing | done | failed
+    source: str                          # manual_paste | file_upload | file_upload_txt
+    dataset_id: Optional[str] = None     # set once segments are persisted
+    analytics_report: Optional[dict] = None  # set once analysis is complete
+    error_message: Optional[str] = None
+    created_at: str
+    updated_at: str
+
+    model_config = {"from_attributes": True}
+
+
+class SubmitAudienceFeedbackRequest(BaseModel):
+    """Body for POST /audience-analysis (text path)."""
+    project_id: str
+    feedback: str
 
 
 # ── Trailer schemas ───────────────────────────────────────────────────────────
@@ -162,6 +197,7 @@ class TrailerClip(BaseModel):
     platform: Optional[str] = None
     mood_group: str = "calm"        # action | emotional | dialogue | calm
     transcript_text: str = ""       # full transcript text for this clip
+    muted: bool = False             # when True, audio is silenced during render
 
 
 class TrailerEditingPlan(BaseModel):
@@ -197,6 +233,7 @@ class TrailerJobResponse(BaseModel):
 class GenerateTrailerRequest(BaseModel):
     project_id: str
     dataset_id: str
+    strategy: Optional[str] = None   # user trailer strategy text; None = existing behaviour
 
 
 # ── Smart Trailer schemas ───────────────────────────────────────────────────────────────
@@ -267,6 +304,7 @@ class SmartTrailerAnalysis(BaseModel):
 class SmartTrailerJobResponse(BaseModel):
     """API response for smart trailer job status."""
     id: str
+    project_id: Optional[str] = None
     raw_footage_name: str
     sample_trailer_name: str
     comments_name: str

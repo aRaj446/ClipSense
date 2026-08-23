@@ -7,10 +7,11 @@ import LoadingSpinner from '../components/LoadingSpinner'
 import SmartTrailerPanel from '../components/SmartTrailerPanel'
 import ProjectDetailsEmbed from '../components/ProjectDetailsEmbed'
 import SmartDetailsPage from './SmartDetailsPage'
+import ProjectGenerationPanel from '../components/ProjectGenerationPanel'
 
 export default function TrailersGalleryPage() {
   const [searchParams, setSearchParams] = useSearchParams()
-  const mode       = (searchParams.get('mode') as 'standard' | 'smart') ?? 'standard'
+  const mode       = (searchParams.get('mode') as 'standard' | 'smart' | 'project') ?? 'project'
   const projectId  = searchParams.get('project') ?? null
   const smartJobId = searchParams.get('smart')   ?? null
 
@@ -24,8 +25,9 @@ export default function TrailersGalleryPage() {
       .finally(() => setLoading(false))
   }, [])
 
-  function setMode(m: 'standard' | 'smart') {
-    if (m === 'standard') setSearchParams(projectId ? { project: projectId } : {})
+  function setMode(m: 'standard' | 'smart' | 'project') {
+    if (m === 'standard') setSearchParams(projectId ? { mode: 'standard', project: projectId } : { mode: 'standard' })
+    else if (m === 'project') setSearchParams(projectId ? { project: projectId } : {})
     else setSearchParams(smartJobId ? { mode: 'smart', smart: smartJobId } : { mode: 'smart' })
   }
 
@@ -104,12 +106,19 @@ export default function TrailersGalleryPage() {
 
           {/* mode toggle — big pill style */}
           <div className="flex gap-3">
+            <button onClick={() => setMode('project')}
+              className="flex items-center gap-2.5 px-6 py-3 rounded-2xl font-semibold text-sm transition-all duration-200"
+              style={mode === 'project'
+                ? { background: 'linear-gradient(135deg,#D4A843,#E8C56A)', color: '#0C0C14', boxShadow: '0 0 24px 0 #D4A84350' }
+                : { background: 'rgba(255,255,255,0.05)', border: '1px solid #2A2A40', color: '#A8A4B8' }}>
+              <Film size={16} /> Project Trailer
+            </button>
             <button onClick={() => setMode('standard')}
               className="flex items-center gap-2.5 px-6 py-3 rounded-2xl font-semibold text-sm transition-all duration-200"
               style={mode === 'standard'
                 ? { background: 'linear-gradient(135deg,#D4A843,#E8C56A)', color: '#0C0C14', boxShadow: '0 0 24px 0 #D4A84350' }
                 : { background: 'rgba(255,255,255,0.05)', border: '1px solid #2A2A40', color: '#A8A4B8' }}>
-              <Clapperboard size={16} /> Standard Trailer
+              <Clapperboard size={16} /> Standard
             </button>
             <button onClick={() => setMode('smart')}
               className="flex items-center gap-2.5 px-6 py-3 rounded-2xl font-semibold text-sm transition-all duration-200"
@@ -121,6 +130,65 @@ export default function TrailersGalleryPage() {
           </div>
         </div>
       </div>
+
+      {/* ── Project (Phase 4) ── */}
+      {mode === 'project' && (
+        projectId ? (
+          <div className="space-y-4">
+            <button onClick={clearProject}
+              className="flex items-center gap-1.5 text-sm transition-colors"
+              style={{ color: '#A8A4B8' }}>
+              <ChevronRight size={14} className="rotate-180" /> Back to projects
+            </button>
+            {(() => {
+              const p = projects.find(pr => pr.id === projectId)
+              return p ? <ProjectGenerationPanel key={projectId} project={p} /> : null
+            })()}
+          </div>
+        ) : loading ? (
+          <div className="flex justify-center py-16"><LoadingSpinner size={32} /></div>
+        ) : projects.length === 0 ? (
+          <div className="flex flex-col items-center py-20 rounded-3xl"
+            style={{ background: 'linear-gradient(145deg,#13131F,#1A1A2E)', border: '1px solid #252538' }}>
+            <div className="w-20 h-20 rounded-3xl flex items-center justify-center mb-5 animate-float"
+              style={{ background: 'linear-gradient(135deg,#D4A84314,#8B7CF614)', border: '1px solid #D4A84325' }}>
+              <Film size={32} style={{ color: '#5C5A72' }} />
+            </div>
+            <p className="text-lg font-semibold mb-2" style={{ color: '#F0EDE8' }}>No projects yet</p>
+            <p className="text-sm" style={{ color: '#5C5A72' }}>Upload a project first to generate trailers.</p>
+          </div>
+        ) : (
+          <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-4">
+            {projects.map((p, i) => (
+              <button key={p.id} onClick={() => selectProject(p.id)}
+                className="group rounded-2xl p-5 text-left transition-all duration-200 animate-fade-in"
+                style={{
+                  background: 'linear-gradient(145deg,#13131F,#1A1A2E)',
+                  border: '1px solid #252538',
+                  animationDelay: `${i * 60}ms`,
+                }}>
+                <div className="flex items-center gap-4">
+                  <div className="w-12 h-12 rounded-xl flex items-center justify-center shrink-0 transition-all duration-200 group-hover:scale-110"
+                    style={{ background: 'linear-gradient(135deg,#D4A84318,#8B7CF614)', border: '1px solid #D4A84325' }}>
+                    <Film size={20} style={{ color: '#D4A843' }} />
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <p className="font-semibold text-sm truncate transition-colors duration-200"
+                      style={{ color: '#F0EDE8' }}>
+                      {p.name || p.filename}
+                    </p>
+                    <p className="text-xs mt-0.5" style={{ color: '#5C5A72' }}>
+                      {p.dataset_id ? 'Dataset ready' : 'No dataset'}
+                    </p>
+                  </div>
+                  <ChevronRight size={16} className="shrink-0 transition-all duration-200 group-hover:translate-x-1"
+                    style={{ color: '#5C5A72' }} />
+                </div>
+              </button>
+            ))}
+          </div>
+        )
+      )}
 
       {/* ── Standard ── */}
       {mode === 'standard' && (
@@ -163,7 +231,7 @@ export default function TrailersGalleryPage() {
                   <div className="flex-1 min-w-0">
                     <p className="font-semibold text-sm truncate transition-colors duration-200"
                       style={{ color: '#F0EDE8' }}>
-                      {p.filename}
+                      {p.name || p.filename}
                     </p>
                     <p className="text-xs mt-0.5 capitalize" style={{ color: '#5C5A72' }}>{p.status}</p>
                   </div>

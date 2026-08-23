@@ -32,6 +32,12 @@ SENSECAP_CS_COLUMNS = [
     "sentiment_score",  # direction × confidence, clamped to [-1, 1]
     "theme",            # seg.topic
     "confidence",       # seg.confidence as float [0, 1]
+    # audience_preferences — pipe-delimited lists, same value on every row of the dataset
+    "ap_liked",
+    "ap_disliked",
+    "ap_recurring_requests",
+    "ap_recurring_complaints",
+    "ap_recurring_praise",
 ]
 
 _POSITIVE_SENTIMENTS = frozenset({"Positive", "Praise"})
@@ -85,13 +91,32 @@ def safe_filename(raw: str, fallback: str) -> str:
     return cleaned[:64] or fallback
 
 
-def build_sensecap_csv(segments, dataset_name: str) -> bytes:
+def _pipe(items: list) -> str:
+    """Encode a list as a pipe-delimited string, escaping pipes inside items."""
+    return "|".join(str(i).replace("|", "\\|") for i in (items or []))
+
+
+def build_sensecap_csv(segments, dataset_name: str, audience_preferences=None) -> bytes:
     """
     Serialise a list of FeedbackSegmentRecord ORM objects to a UTF-8 CSV
     using SENSECAP_CS_COLUMNS as the canonical schema.
 
+    audience_preferences: optional AudiencePreferences schema instance or dict.
+    When provided, its five lists are embedded as pipe-delimited columns on
+    every row so Sensecap can read them from the first data row.
+
     Returns raw bytes ready for a StreamingResponse.
     """
+    ap = audience_preferences or {}
+    if hasattr(ap, "model_dump"):
+        ap = ap.model_dump()
+
+    ap_liked       = _pipe(ap.get("liked", []))
+    ap_disliked    = _pipe(ap.get("disliked", []))
+    ap_requests    = _pipe(ap.get("recurring_requests", []))
+    ap_complaints  = _pipe(ap.get("recurring_complaints", []))
+    ap_praise      = _pipe(ap.get("recurring_praise", []))
+
     buf = io.StringIO()
     writer = csv.DictWriter(
         buf,
@@ -105,15 +130,20 @@ def build_sensecap_csv(segments, dataset_name: str) -> bytes:
         norm_label = normalise_sentiment_label(seg.sentiment)
         score      = sentiment_score(norm_label, seg.confidence)
         writer.writerow({
-            "source":          "clipsense",
-            "dataset_name":    dataset_name,
-            "text":            seg.summary,
-            "timestamp":       seg.created_at.isoformat(),
-            "video_timestamp": seg.timestamp or "",
-            "sentiment_label": norm_label,
-            "sentiment_score": score,
-            "theme":           seg.topic,
-            "confidence":      round(seg.confidence, 6),
+            "source":                  "clipsense",
+            "dataset_name":            dataset_name,
+            "text":                    seg.summary,
+            "timestamp":               seg.created_at.isoformat(),
+            "video_timestamp":         seg.timestamp or "",
+            "sentiment_label":         norm_label,
+            "sentiment_score":         score,
+            "theme":                   seg.topic,
+            "confidence":              round(seg.confidence, 6),
+            "ap_liked":                ap_liked,
+            "ap_disliked":             ap_disliked,
+            "ap_recurring_requests":   ap_requests,
+            "ap_recurring_complaints": ap_complaints,
+            "ap_recurring_praise":     ap_praise,
         })
 
     return buf.getvalue().encode("utf-8")

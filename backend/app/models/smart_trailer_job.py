@@ -21,6 +21,9 @@ class SmartTrailerJob(Base):
     __tablename__ = "smart_trailer_jobs"
 
     id                  = Column(String,   primary_key=True)
+    # Project-based generation (Phase 4) — null for legacy smart trailer jobs
+    project_id          = Column(String,   nullable=True,  index=True)
+    dataset_id          = Column(String,   nullable=True)
     # input file paths (stored on disk under uploads/smart/)
     raw_footage_path    = Column(String,   nullable=False)
     sample_trailer_path = Column(String,   nullable=False)
@@ -44,6 +47,7 @@ class SmartTrailerJob(Base):
     # time-saved calculation can use the actual input length, not the output length.
     raw_footage_duration_secs = Column(Float, nullable=True)
     fast_mode           = Column(String,   nullable=True)   # 'true'|'false' — set at generation time
+    user_prompt         = Column(Text,     nullable=True)   # user expectations / creative direction
     # GPU/device metadata — recorded at generation time for analytics/debug
     device_used         = Column(String,   nullable=True)   # 'cuda'|'cpu'
     encoder_used        = Column(String,   nullable=True)   # 'h264_nvenc'|'libx264'

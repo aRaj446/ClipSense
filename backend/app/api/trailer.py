@@ -26,6 +26,7 @@ from app.services.video_regeneration_agent import VideoRegenerationAgent
 from app.services.analytics_agent import AnalyticsAgent
 from app.services.video_optimization_agent import VideoOptimizationAgent
 from app.services.feedback_dataset_service import FeedbackDatasetService
+from app.services.trailer_strategy_service import TrailerStrategyService
 from app.services.project_service import ProjectService
 from app.models.trailer_job import TrailerJob
 from app.db.database import get_db
@@ -34,11 +35,12 @@ router = APIRouter()
 
 logger = logging.getLogger(__name__)
 
-_regen_agent     = VideoRegenerationAgent()
-_analytics_agent = AnalyticsAgent()
-_optim_agent     = VideoOptimizationAgent()
-_dataset_service = FeedbackDatasetService()
-_project_service = ProjectService()
+_regen_agent      = VideoRegenerationAgent()
+_analytics_agent  = AnalyticsAgent()
+_optim_agent      = VideoOptimizationAgent()
+_dataset_service  = FeedbackDatasetService()
+_strategy_service = TrailerStrategyService()
+_project_service  = ProjectService()
 
 
 # ── POST /generate-trailer ────────────────────────────────────────────────────
@@ -70,12 +72,20 @@ def generate_trailer(
     video_duration  = float(project.get("duration") or 0)
     target_duration = max(30.0, min(120.0, round(video_duration * 0.15)))
 
+    # Resolve strategy: explicit body override > persisted user_strategy > None
+    strategy_text: str | None = body.strategy or None
+    if strategy_text is None:
+        saved = _strategy_service.get(db, body.dataset_id)
+        if saved:
+            strategy_text = saved.user_strategy or None
+
     background_tasks.add_task(
         _run_job,
         job_id=job.id,
         project=project,
         dataset_segments=ds.segments,
         target_duration=target_duration,
+        strategy_text=strategy_text,
     )
 
     return _serialise(job)
@@ -129,6 +139,11 @@ def cancel_trailer_job(job_id: str, db: Session = Depends(get_db)):
         raise HTTPException(status_code=404, detail="Job not found")
     if job.status not in ("pending", "processing"):
         raise HTTPException(status_code=400, detail="Job is not in a cancellable state")
+
+    # Signal the background thread to stop + kill any FFmpeg subprocess
+    from app.utils.job_queue import cancel_job
+    cancel_job(job_id)
+
     job.status        = "failed"
     job.error_message = "Cancelled by user"
     job.updated_at    = datetime.now(timezone.utc)
@@ -193,6 +208,7 @@ def _run_job(
     project: dict,
     dataset_segments,
     target_duration: float,
+    strategy_text: str | None = None,
 ):
     from app.db.database import SessionLocal
 
@@ -209,13 +225,14 @@ def _run_job(
         from app.utils.job_queue import job_slot
         from app.utils.render_progress import set_progress, init_steps
         _STEPS = [
-            {"key": "scenes",     "label": "Detecting scenes",       "status": "pending", "percent": 0},
-            {"key": "transcript", "label": "Transcribing audio",      "status": "pending", "percent": 0},
-            {"key": "beats",      "label": "Analysing beat rhythm",   "status": "pending", "percent": 0},
-            {"key": "planning",   "label": "Planning clip selection", "status": "pending", "percent": 0},
-            {"key": "extracting", "label": "Extracting clips",        "status": "pending", "percent": 0},
-            {"key": "composing",  "label": "Composing transitions",   "status": "pending", "percent": 0},
-            {"key": "normalising","label": "Normalising audio",       "status": "pending", "percent": 0},
+            {"key": "strategy",   "label": "Loading strategy",        "status": "pending", "percent": 0},
+            {"key": "scenes",     "label": "Detecting scenes",         "status": "pending", "percent": 0},
+            {"key": "transcript", "label": "Transcribing audio",       "status": "pending", "percent": 0},
+            {"key": "beats",      "label": "Analysing beat rhythm",    "status": "pending", "percent": 0},
+            {"key": "planning",   "label": "Planning clip selection",  "status": "pending", "percent": 0},
+            {"key": "extracting", "label": "Extracting clips",         "status": "pending", "percent": 0},
+            {"key": "composing",  "label": "Composing transitions",    "status": "pending", "percent": 0},
+            {"key": "normalising","label": "Normalising audio",        "status": "pending", "percent": 0},
         ]
         set_progress(job_id, "queued", 0, "Waiting for previous job to finish…", steps=_STEPS)
         with job_slot():
@@ -267,6 +284,7 @@ def _run_job(
                 video_duration=video_duration,
                 target_duration=target_duration,
                 job_id=job_id,
+                strategy_text=strategy_text,
             )
 
         if error or not output_path:

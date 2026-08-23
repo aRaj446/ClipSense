@@ -1,20 +1,4 @@
-fastapi==0.111.0
-uvicorn[standard]==0.29.0
-python-multipart==0.0.9
-aiofiles==23.2.1
-ffmpeg-python==0.2.0
-sqlalchemy==2.0.36
-alembic==1.13.3
-transformers>=4.40.0
-torch>=2.2.0
-sentencepiece>=0.2.0
-openpyxl==3.1.5
-scenedetect[opencv]>=0.7
-openai-whisper>=20250625
-librosa>=0.11.0
-soundfile>=0.12.1
-scikit-learn>=1.4.0
-python-dotenv>=1.0.0
-moviepy>=2.0.0
-imageio>=2.34.0
-imageio-ffmpeg>=0.5.1
+# All dependencies are managed from the project root.
+# Install from: C:\Users\7000039334\Documents\Gearshift\Clipsense\requirements.txt
+#
+#   pip install -r ../requirements.txt

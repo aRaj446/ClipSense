@@ -165,12 +165,31 @@ def _resolve_encoder() -> str:
         return "libx264"
 
 
-def _run(cmd: list[str], timeout: int = 300) -> tuple[bool, str]:
+def _run(cmd: list[str], timeout: int = 300, job_id: str | None = None) -> tuple[bool, str]:
+    """Run an FFmpeg command. If job_id is provided, registers the subprocess for cancellation."""
+    from app.utils.job_queue import register_process, unregister_process, is_cancelled
+
+    if job_id and is_cancelled(job_id):
+        return False, "Cancelled by user"
+
     try:
-        r = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
-        return r.returncode == 0, r.stderr
-    except subprocess.TimeoutExpired:
-        return False, f"FFmpeg timed out after {timeout}s"
+        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        if job_id:
+            register_process(job_id, proc)
+        try:
+            stdout, stderr = proc.communicate(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.communicate()
+            return False, f"FFmpeg timed out after {timeout}s"
+        finally:
+            if job_id:
+                unregister_process(job_id)
+
+        if job_id and is_cancelled(job_id):
+            return False, "Cancelled by user"
+
+        return proc.returncode == 0, stderr.decode('utf-8', errors='replace')
     except FileNotFoundError:
         return False, f"FFmpeg not found at '{cmd[0]}'"
     except Exception as exc:
@@ -531,7 +550,15 @@ def compose(
 
     # Job-scoped temp directory — all temp files (clips, concat, SRT) live here.
     # Deleted unconditionally in the finally block.
-    tmp_dir = tempfile.mkdtemp(prefix="clipsense_compose_")
+    # Resolve long path immediately to avoid Windows 8.3 short names in FFmpeg args.
+    _raw_tmp = tempfile.mkdtemp(prefix="clipsense_compose_")
+    try:
+        import ctypes
+        _buf = ctypes.create_unicode_buffer(32768)
+        ctypes.windll.kernel32.GetLongPathNameW(_raw_tmp, _buf, 32768)
+        tmp_dir = _buf.value or _raw_tmp
+    except Exception:
+        tmp_dir = _raw_tmp
 
     try:
         # ── Step 1: Extract, normalise, grade, and loudnorm each clip ────────
@@ -540,12 +567,51 @@ def compose(
         n_clips = len(clips)
 
         for i, clip in enumerate(clips):
+            # Check cancellation between each clip extraction
+            if job_id:
+                from app.utils.job_queue import is_cancelled
+                if is_cancelled(job_id):
+                    return False, "Cancelled by user"
+
             pct_overall = 55 + int((i / n_clips) * 20)
             _progress("extracting", int((i / n_clips) * 40), f"Extracting clip {i + 1}/{n_clips}")
             _step("extracting", "active", int((i / n_clips) * 100), f"Clip {i + 1} of {n_clips}", overall=pct_overall)
             out = os.path.join(tmp_dir, f"clip_{i:03d}.mp4")
 
-            audio_filter = f"{_CLIP_LOUDNORM},aresample=async=1000"
+            # Muted clips: replace audio with silence of the same duration.
+            # anullsrc generates a silent stream; atrim caps it to the clip length.
+            if getattr(clip, 'muted', False):
+                clip_dur = clip.end_time - clip.start_time
+                audio_filter = (
+                    f"anullsrc=r=44100:cl=stereo,"
+                    f"atrim=duration={clip_dur:.3f},"
+                    f"aresample=async=1000"
+                )
+                audio_map = ["-f", "lavfi", "-i", f"anullsrc=r=44100:cl=stereo"]
+                audio_map_flag = ["-map", "1:a:0"]
+            else:
+                audio_filter = f"{_CLIP_LOUDNORM},aresample=async=1000"
+                audio_map = []
+                audio_map_flag = ["-map", "0:a:0"]
+
+            # Speed control: apply setpts for video and atempo for audio
+            clip_speed = getattr(clip, 'speed', 1.0)
+            speed_vf = ""
+            speed_af = ""
+            if clip_speed != 1.0 and clip_speed > 0:
+                # setpts=PTS/speed makes video faster (speed>1) or slower (speed<1)
+                speed_vf = f",setpts=PTS/{clip_speed}"
+                # atempo only supports 0.5–2.0 range; chain multiple for extremes
+                if clip_speed >= 0.5 and clip_speed <= 2.0:
+                    speed_af = f",atempo={clip_speed}"
+                elif clip_speed < 0.5:
+                    # Chain two atempo filters: sqrt(speed) * sqrt(speed)
+                    half = clip_speed ** 0.5
+                    speed_af = f",atempo={half:.4f},atempo={half:.4f}"
+                else:
+                    # speed > 2.0: chain two
+                    half = clip_speed ** 0.5
+                    speed_af = f",atempo={half:.4f},atempo={half:.4f}"
 
             _encoder = _resolve_encoder()
             from app.utils.device import encoder_options
@@ -554,9 +620,10 @@ def compose(
                 "-ss", str(clip.start_time),
                 "-to", str(clip.end_time),
                 "-i", input_path,
-                "-map", "0:v:0", "-map", "0:a:0",
-                "-vf", _CLIP_VF,
-                "-af", audio_filter,
+                *audio_map,
+                "-map", "0:v:0", *audio_map_flag,
+                "-vf", f"{_CLIP_VF}{speed_vf}",
+                "-af", f"{audio_filter}{speed_af}",
                 "-c:v", _encoder, *encoder_options(_encoder),
                 "-c:a", "aac", "-b:a", "192k",
                 "-avoid_negative_ts", "make_zero",
@@ -564,7 +631,7 @@ def compose(
                 "-max_muxing_queue_size", "1024",
                 out,
             ]
-            ok, err = _run(cmd)
+            ok, err = _run(cmd, job_id=job_id)
             if not ok:
                 logger.warning(
                     "compose: clip %d (%.1f-%.1f) extraction failed, skipping - %s",
@@ -635,7 +702,6 @@ def compose(
         audio_filt = f"{boundary_filter}{fade_filter}{eq_filter}{loudnorm}"
 
         # Video filter: optional subtitle burn-in + fade + format pin
-        srt_path: str | None = None
         subtitle_vf = ""
         if include_subtitles:
             subtitle_entries = map_transcript_to_timeline(
@@ -645,19 +711,31 @@ def compose(
                 transcript,
             )
             if subtitle_entries:
-                srt_path = os.path.join(tmp_dir, "subtitles.srt")
-                write_srt_file(subtitle_entries, srt_path, total_duration=duration)
-                # Escape path for FFmpeg filter — backslashes and colons need escaping
-                srt_escaped = srt_path.replace("\\", "/").replace(":", "\\:")
-                # Cinematic style: white text, dark semi-transparent box, bottom-centre
-                # force_style uses ASS override tags; MarginV=60 keeps text in safe area
-                subtitle_vf = (
-                    f"subtitles='{srt_escaped}'"
-                    f":force_style='FontName=Arial,FontSize=22,PrimaryColour=&H00FFFFFF,"
-                    f"OutlineColour=&H00000000,BackColour=&H80000000,"
-                    f"BorderStyle=4,Outline=1,Shadow=0,Alignment=2,MarginV=60',"
-                )
-                logger.info("compose: burning %d subtitle entries from %s", len(subtitle_entries), srt_path)
+                # Build drawtext filters — one per subtitle entry.
+                # Strip characters that break FFmpeg filter string parsing.
+                dt_parts: list[str] = []
+                for entry in subtitle_entries:
+                    safe_text = (
+                        entry["text"]
+                        .replace("'", "")
+                        .replace('"', "")
+                        .replace("\\", "")
+                        .replace(":", " ")
+                        .replace("%", "%%")
+                        .strip()
+                    )
+                    if not safe_text:
+                        continue
+                    dt_parts.append(
+                        f"drawtext=text='{safe_text}'"
+                        f":fontsize=22:fontcolor=white"
+                        f":box=1:boxcolor=black@0.5:boxborderw=6"
+                        f":x=(w-text_w)/2:y=h-th-60"
+                        f":enable='between(t,{entry['start']},{entry['end']})'"
+                    )
+                if dt_parts:
+                    subtitle_vf = ",".join(dt_parts) + ","
+                    logger.info("compose: burning %d subtitle entries via drawtext", len(dt_parts))
             else:
                 logger.info("compose: include_subtitles=True but no transcript segments mapped — subtitles skipped")
 
@@ -676,7 +754,7 @@ def compose(
             "-c:a", "aac", "-b:a", "192k",
             "-movflags", "+faststart",
             output_path,
-        ])
+        ], job_id=job_id)
         if not ok:
             return False, f"Final output failed: {err}"
 
@@ -686,4 +764,4 @@ def compose(
 
     finally:
         import shutil
-        shutil.rmtree(tmp_dir, ignore_errors=True)
+        shutil.rmtree(_raw_tmp, ignore_errors=True)

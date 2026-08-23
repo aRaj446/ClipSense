@@ -609,6 +609,7 @@ class SmartTrailerAgent:
         audio=None,
         include_subtitles: bool = False,
         fast_mode: bool = False,
+        output_dir: str | None = None,   # Phase 6: if set, write output here instead of TRAILERS_DIR
     ) -> tuple[str | None, TrailerEditingPlan | None, SmartTrailerAnalysis | None,
                str | None, str | None, float | None, bool, str | None, float | None]:
         # Returns: (output_path, plan, analysis, error, platform, clip_score,
@@ -809,7 +810,10 @@ class SmartTrailerAgent:
         )
 
         output_filename = f"smart_{job_id}_{uuid.uuid4().hex[:8]}.mp4"
-        output_path     = os.path.join(TRAILERS_DIR, output_filename)
+        _out_dir        = output_dir if output_dir else TRAILERS_DIR
+        if output_dir:
+            os.makedirs(output_dir, exist_ok=True)
+        output_path     = os.path.join(_out_dir, output_filename)
 
         logger.info(
             "SmartTrailerAgent: composing — platform=%s score=%.3f clips=%d → %s",

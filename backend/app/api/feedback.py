@@ -309,7 +309,10 @@ def export_dataset_csv(dataset_id: str, db: Session = Depends(get_db)):
         )
 
     dataset_label = ds.name or ""
-    csv_bytes = build_sensecap_csv(ds.segments, dataset_label)
+    # Include audience_preferences if an analytics report has been cached
+    cached = _dataset_service.get_analytics_cache(db, dataset_id)
+    ap = cached.get("audience_preferences") if cached else None
+    csv_bytes = build_sensecap_csv(ds.segments, dataset_label, audience_preferences=ap)
     safe_name = _safe_filename(dataset_label, dataset_id[:8])
     filename  = f"sensecap_{safe_name}.csv"
 

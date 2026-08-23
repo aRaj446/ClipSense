@@ -1,58 +1,67 @@
 import { useState, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
-  CheckCircle, FileVideo, Clock, HardDrive, X,
-  Clapperboard, Film, MessageSquare, Loader2, Wand2,
+  Film, Clapperboard, MessageSquare,
+  Upload, CheckCircle, X, HardDrive, BarChart2, Zap,
 } from 'lucide-react'
 import { uploadService } from '../services/uploadService'
-import { smartTrailerService } from '../services/smartTrailerService'
 import { useToast } from '../context/ToastContext'
-import FileUploader from '../components/FileUploader'
-import ProgressBar from '../components/ProgressBar'
 import Button from '../components/Button'
 import Card from '../components/Card'
-import DataSourceDisclaimer from '../components/DataSourceDisclaimer'
-import { formatFileSize, formatDuration } from '../utils/format'
+import ProgressBar from '../components/ProgressBar'
+import { formatFileSize } from '../utils/format'
 
-interface PendingFile {
-  file: File
-  previewUrl: string
-  duration: number | null
-}
+// ── Reusable file picker ──────────────────────────────────────────────────────
 
-// ── Smart file input ──────────────────────────────────────────────────────────
-
-function FileInput({
-  label, accept, file, onChange, icon,
-}: {
+interface FileInputProps {
   label: string
+  hint: string
   accept: string
   file: File | null
   onChange: (f: File | null) => void
   icon: React.ReactNode
-}) {
+  required?: boolean
+}
+
+function FileInput({ label, hint, accept, file, onChange, icon, required }: FileInputProps) {
   const ref = useRef<HTMLInputElement>(null)
   return (
-    <div className="flex flex-col gap-1">
-      <span className="text-xs text-slate-400 font-medium">{label}</span>
+    <div className="flex flex-col gap-1.5">
+      <div className="flex items-center gap-1.5">
+        <span className="text-sm font-medium text-slate-200">{label}</span>
+        {required && <span className="text-xs text-red-400">*</span>}
+      </div>
       <button
         type="button"
         onClick={() => ref.current?.click()}
-        className={`flex items-center gap-2 px-3 py-2.5 rounded-lg border text-sm transition-colors text-left
+        className={`flex items-center gap-3 px-4 py-3 rounded-xl border text-sm transition-all text-left
           ${file
-            ? 'border-primary/40 bg-primary/5 text-primary'
-            : 'border-surface-border text-slate-400 hover:border-slate-500 hover:text-slate-200'
+            ? 'border-primary/50 bg-primary/8 text-primary'
+            : 'border-surface-border text-slate-400 hover:border-slate-500 hover:text-slate-200 hover:bg-surface-card'
           }`}
       >
-        {icon}
-        <span className="truncate flex-1">{file ? file.name : `Choose ${label}…`}</span>
+        <span className="shrink-0 opacity-70">{icon}</span>
+        <span className="flex-1 min-w-0">
+          {file ? (
+            <span className="flex flex-col gap-0.5">
+              <span className="truncate font-medium text-slate-100">{file.name}</span>
+              <span className="text-xs text-slate-500">{formatFileSize(file.size)}</span>
+            </span>
+          ) : (
+            <span className="flex flex-col gap-0.5">
+              <span>Choose {label}…</span>
+              <span className="text-xs text-slate-600">{hint}</span>
+            </span>
+          )}
+        </span>
         {file && (
           <span
             role="button"
+            aria-label={`Remove ${label}`}
             onClick={e => { e.stopPropagation(); onChange(null) }}
-            className="text-slate-500 hover:text-red-400 transition-colors shrink-0 text-xs"
+            className="shrink-0 text-slate-500 hover:text-red-400 transition-colors p-1"
           >
-            ✕
+            <X size={14} />
           </span>
         )}
       </button>
@@ -67,312 +76,247 @@ function FileInput({
   )
 }
 
-const CREATIVE_CHIPS = [
-  { label: 'More action',           append: 'more action' },
-  { label: 'More emotional',        append: 'more emotional' },
-  { label: 'More humour',           append: 'more humour' },
-  { label: 'More suspense',         append: 'more suspense' },
-  { label: 'Faster pacing',         append: 'faster pacing' },
-  { label: 'More character moments',append: 'more character moments' },
-]
+// ── Success modal ─────────────────────────────────────────────────────────────
+
+interface SuccessModalProps {
+  projectId: string
+  datasetId: string
+  onClose: () => void
+}
+
+function SuccessModal({ projectId, datasetId, onClose }: SuccessModalProps) {
+  const navigate = useNavigate()
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4"
+      style={{ background: 'rgba(0,0,0,0.7)', backdropFilter: 'blur(6px)' }}>
+      <div className="relative w-full max-w-md rounded-2xl p-8 animate-fade-in"
+        style={{
+          background: 'linear-gradient(145deg, #13131F, #1A1A2E)',
+          border: '1px solid #2A2A40',
+          boxShadow: '0 24px 80px 0 #00000090',
+        }}>
+
+        {/* Close */}
+        <button
+          onClick={onClose}
+          className="absolute top-4 right-4 text-slate-500 hover:text-slate-300 transition-colors"
+        >
+          <X size={18} />
+        </button>
+
+        {/* Icon */}
+        <div className="flex justify-center mb-5">
+          <div className="w-16 h-16 rounded-2xl flex items-center justify-center"
+            style={{ background: 'linear-gradient(135deg,#22c55e20,#16a34a18)', border: '1px solid #22c55e30' }}>
+            <CheckCircle size={32} className="text-green-400" />
+          </div>
+        </div>
+
+        {/* Message */}
+        <h2 className="text-xl font-bold text-center text-slate-100 mb-2">
+          Upload Successful
+        </h2>
+        <p className="text-sm text-center text-slate-400 mb-8 leading-relaxed">
+          Your project has been created. To perform Sentiment Analysis, go to the{' '}
+          <span className="text-primary font-medium">Analytics</span> tab.
+        </p>
+
+        {/* Navigation buttons */}
+        <div className="flex flex-col gap-3">
+          <Button
+            onClick={() => navigate(`/analytics?project=${projectId}&dataset=${datasetId}`)}
+            icon={<BarChart2 size={15} />}
+            className="w-full justify-center"
+          >
+            Go to Analytics
+          </Button>
+          <Button
+            variant="ghost"
+            onClick={() => navigate(`/trailers?project=${projectId}`)}
+            icon={<Zap size={15} />}
+            className="w-full justify-center"
+          >
+            Go to Video Generation
+          </Button>
+          <Button
+            variant="ghost"
+            onClick={onClose}
+            className="w-full justify-center text-slate-500"
+          >
+            Upload Another Project
+          </Button>
+        </div>
+      </div>
+    </div>
+  )
+}
 
 // ── Page ──────────────────────────────────────────────────────────────────────
 
 export default function UploadPage() {
-  const navigate = useNavigate()
   const { toast } = useToast()
-  const [mode, setMode] = useState<'standard' | 'smart'>('standard')
 
-  // Standard state
-  const [pending, setPending]     = useState<PendingFile | null>(null)
-  const [progress, setProgress]   = useState(0)
-  const [uploading, setUploading] = useState(false)
-
-  // Smart state
   const [rawFootage,    setRawFootage]    = useState<File | null>(null)
   const [sampleTrailer, setSampleTrailer] = useState<File | null>(null)
-  const [commentsFile,  setCommentsFile]  = useState<File | null>(null)
-  const [userPrompt,    setUserPrompt]    = useState('')
-  const [smartUploading, setSmartUploading] = useState(false)
-  const [smartPct,       setSmartPct]       = useState(0)
+  const [feedbackFile,  setFeedbackFile]  = useState<File | null>(null)
+  const [projectName,   setProjectName]   = useState('')
 
-  // ── Standard handlers ──────────────────────────────────────────────────────
+  const [uploading,  setUploading]  = useState(false)
+  const [progress,   setProgress]   = useState(0)
+  const [successInfo, setSuccessInfo] = useState<{ projectId: string; datasetId: string } | null>(null)
 
-  function handleFile(file: File) {
-    const previewUrl = URL.createObjectURL(file)
-    const video = document.createElement('video')
-    video.preload = 'metadata'
-    video.src = previewUrl
-    video.onloadedmetadata = () => setPending({ file, previewUrl, duration: video.duration || null })
-    video.onerror = () => setPending({ file, previewUrl, duration: null })
-  }
-
-  function clearPending() {
-    if (pending?.previewUrl) URL.revokeObjectURL(pending.previewUrl)
-    setPending(null)
-    setProgress(0)
-  }
+  const canUpload = rawFootage && sampleTrailer && feedbackFile && !uploading
 
   async function handleUpload() {
-    if (!pending) return
+    if (!rawFootage || !sampleTrailer || !feedbackFile) return
     setUploading(true)
     setProgress(0)
     try {
-      const project = await uploadService.uploadVideo(pending.file, setProgress)
-      toast('Video uploaded successfully!')
-      clearPending()
-      navigate(`/project/${project.id}`)
-    } catch {
-      toast('Upload failed. Please try again.', 'error')
-      setUploading(false)
-      setProgress(0)
-    }
-  }
-
-  // ── Smart handlers ─────────────────────────────────────────────────────────
-
-  const canGenerate = rawFootage && sampleTrailer && commentsFile && !smartUploading
-
-  async function handleSmartGenerate() {
-    if (!rawFootage || !sampleTrailer || !commentsFile) return
-    setSmartUploading(true)
-    setSmartPct(0)
-    try {
-      const job = await smartTrailerService.upload(
-        rawFootage, sampleTrailer, commentsFile,
-        pct => setSmartPct(pct),
+      const result = await uploadService.uploadProject(
+        rawFootage,
+        sampleTrailer,
+        feedbackFile,
+        projectName.trim() || undefined,
+        pct => setProgress(pct),
       )
-      await smartTrailerService.generate(job.id, userPrompt.trim() ? { user_prompt: userPrompt.trim() } : {})
-      toast('Files uploaded — generation started!')
+      setSuccessInfo({
+        projectId: result.project.id,
+        datasetId: result.dataset_id,
+      })
+      // Reset form
       setRawFootage(null)
       setSampleTrailer(null)
-      setCommentsFile(null)
-      // preserve userPrompt — cleared only on explicit reset or new session
-      navigate('/trailers')
+      setFeedbackFile(null)
+      setProjectName('')
+      setProgress(0)
     } catch (err: unknown) {
-      const msg = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail
-        ?? 'Failed to start smart trailer generation.'
-      toast(msg, 'error')
+      const detail = (err as { response?: { data?: { detail?: string } } })
+        ?.response?.data?.detail
+      toast(detail ?? 'Upload failed. Please try again.', 'error')
     } finally {
-      setSmartUploading(false)
-      setSmartPct(0)
+      setUploading(false)
     }
   }
 
-  // ── Render ─────────────────────────────────────────────────────────────────
-
   return (
-    <div className="max-w-2xl mx-auto space-y-6">
+    <>
+      <div className="max-w-xl mx-auto space-y-6">
 
-      <div>
-        <h1 className="text-2xl font-bold text-slate-100">Upload</h1>
-        <p className="text-slate-400 mt-1">Upload a video project or generate a smart trailer</p>
-      </div>
+        {/* Header */}
+        <div>
+          <h1 className="text-2xl font-bold text-slate-100">Upload Project</h1>
+          <p className="text-slate-400 mt-1 text-sm">
+            Provide your raw footage, a sample trailer, and audience feedback to create a project.
+          </p>
+        </div>
 
-      {/* Toggle */}
-      <div className="flex gap-1 p-1 bg-surface-card border border-surface-border rounded-lg w-fit">
-        <button
-          onClick={() => setMode('standard')}
-          className={`flex items-center gap-1.5 px-4 py-1.5 rounded-md text-sm font-medium transition-colors ${
-            mode === 'standard' ? 'bg-surface text-slate-100 shadow-sm' : 'text-slate-500 hover:text-slate-300'
-          }`}
-        >
-          <Clapperboard size={13} /> Standard
-        </button>
-        <button
-          onClick={() => setMode('smart')}
-          className={`flex items-center gap-1.5 px-4 py-1.5 rounded-md text-sm font-medium transition-colors ${
-            mode === 'smart' ? 'bg-surface text-slate-100 shadow-sm' : 'text-slate-500 hover:text-slate-300'
-          }`}
-        >
-          <Clapperboard size={13} /> Smart Trailer
-        </button>
-      </div>
-
-      {/* ── Standard ── */}
-      {mode === 'standard' && (
-        <>
-          <p className="text-slate-400 text-sm">MP4, MOV, AVI, MKV, WEBM · Max 10 GB</p>
-          {!pending ? (
-            <FileUploader onFile={handleFile} />
-          ) : (
-            <Card className="space-y-4">
-              <video
-                src={pending.previewUrl}
-                controls
-                className="w-full rounded-lg bg-black max-h-64"
-                preload="metadata"
-              />
-              <div className="flex items-start gap-3">
-                <div className="p-2 bg-primary/10 rounded-lg shrink-0">
-                  <FileVideo size={20} className="text-primary" />
-                </div>
-                <div className="flex-1 min-w-0">
-                  <p className="font-medium text-slate-100 truncate">{pending.file.name}</p>
-                  <div className="flex gap-4 mt-1 text-sm text-slate-400">
-                    <span className="flex items-center gap-1">
-                      <HardDrive size={12} />
-                      {formatFileSize(pending.file.size)}
-                    </span>
-                    <span className="flex items-center gap-1">
-                      <Clock size={12} />
-                      {formatDuration(pending.duration)}
-                    </span>
-                  </div>
-                </div>
-                <button
-                  onClick={clearPending}
-                  disabled={uploading}
-                  className="text-slate-500 hover:text-slate-300 transition-colors disabled:opacity-50"
-                >
-                  <X size={18} />
-                </button>
-              </div>
-              {uploading && (
-                <div className="space-y-1.5">
-                  <div className="flex justify-between text-xs text-slate-400">
-                    <span>Uploading...</span>
-                    <span>{progress}%</span>
-                  </div>
-                  <ProgressBar percent={progress} />
-                </div>
-              )}
-              <div className="flex gap-3 pt-2">
-                <Button
-                  onClick={handleUpload}
-                  loading={uploading}
-                  icon={<CheckCircle size={16} />}
-                  className="flex-1 justify-center"
-                >
-                  {uploading ? 'Uploading...' : 'Upload Video'}
-                </Button>
-                <Button variant="ghost" onClick={clearPending} disabled={uploading}>
-                  Cancel
-                </Button>
-              </div>
-            </Card>
-          )}
-        </>
-      )}
-
-      {/* ── Smart ── */}
-      {mode === 'smart' && (
         <Card className="space-y-5">
-          <div className="flex items-center gap-2">
-            <Clapperboard size={15} className="text-primary" />
-            <h2 className="font-semibold text-slate-100">Smart Trailer</h2>
+
+          {/* Project name */}
+          <div className="flex flex-col gap-1.5">
+            <span className="text-sm font-medium text-slate-200">Project Name</span>
+            <input
+              type="text"
+              value={projectName}
+              onChange={e => setProjectName(e.target.value)}
+              placeholder="e.g. Summer Campaign 2025"
+              maxLength={255}
+              className="w-full rounded-xl border border-surface-border bg-surface px-4 py-2.5 text-sm text-slate-200 placeholder-slate-600 outline-none focus:ring-1 focus:ring-primary transition-colors"
+            />
+            <span className="text-xs text-slate-600">Optional — used as a display label for this project.</span>
           </div>
 
-          <p className="text-sm text-slate-400 leading-relaxed">
-            Upload raw footage, a sample trailer, and audience comments. ClipSense analyses the
-            sample trailer's editing style and audience sentiment to generate a new trailer
-            from your raw footage.
-          </p>
+          <div className="h-px bg-surface-border" />
 
-          <div className="space-y-3">
+          {/* File inputs */}
+          <div className="space-y-4">
             <FileInput
               label="Raw Footage"
+              hint="MP4, MOV, AVI, MKV, WEBM · Max 10 GB"
               accept="video/*"
               file={rawFootage}
               onChange={setRawFootage}
-              icon={<Film size={14} className="shrink-0" />}
+              icon={<Film size={16} />}
+              required
             />
             <FileInput
               label="Sample Trailer"
+              hint="Reference trailer for style analysis · Max 10 GB"
               accept="video/*"
               file={sampleTrailer}
               onChange={setSampleTrailer}
-              icon={<Clapperboard size={14} className="shrink-0" />}
+              icon={<Clapperboard size={16} />}
+              required
             />
             <FileInput
-              label="Audience Comments (.json / .csv / .txt)"
+              label="Audience Feedback"
+              hint=".json, .csv, or .txt · Structured or unstructured"
               accept=".json,.csv,.txt"
-              file={commentsFile}
-              onChange={setCommentsFile}
-              icon={<MessageSquare size={14} className="shrink-0" />}
+              file={feedbackFile}
+              onChange={setFeedbackFile}
+              icon={<MessageSquare size={16} />}
+              required
             />
           </div>
 
-          <DataSourceDisclaimer />
-
-          {/* Creative direction */}
-          <div className="space-y-2.5">
-            <div className="flex items-center gap-2">
-              <Wand2 size={13} className="text-primary shrink-0" />
-              <span className="text-sm font-medium text-slate-200">Creative direction</span>
-              <span className="text-xs text-slate-500 ml-0.5">(optional)</span>
+          {/* Progress */}
+          {uploading && (
+            <div className="space-y-1.5">
+              <div className="flex justify-between text-xs text-slate-400">
+                <span>Uploading…</span>
+                <span>{progress}%</span>
+              </div>
+              <ProgressBar percent={progress} />
             </div>
-            <p className="text-xs text-slate-500">
-              Tell ClipSense what you want the trailer to feel like.
-            </p>
-            <textarea
-              value={userPrompt}
-              onChange={e => setUserPrompt(e.target.value)}
-              placeholder="e.g. Keep the action, reduce emotional scenes, and make the trailer more humorous."
-              rows={3}
-              className="w-full resize-none rounded-lg border border-surface-border bg-surface px-3 py-2.5 text-sm text-slate-200 placeholder-slate-600 outline-none focus:ring-1 focus:ring-primary transition-colors"
-            />
-            <div className="flex flex-wrap gap-1.5">
-              {CREATIVE_CHIPS.map(chip => (
-                <button
-                  key={chip.label}
-                  type="button"
-                  onClick={() =>
-                    setUserPrompt(prev =>
-                      prev.trim()
-                        ? prev.trimEnd() + ', ' + chip.append
-                        : chip.append
-                    )
-                  }
-                  className="text-xs px-2.5 py-1 rounded-full border border-surface-border text-slate-400 hover:border-primary/40 hover:text-primary transition-colors"
-                >
-                  {chip.label}
-                </button>
+          )}
+
+          {/* File summary when all selected */}
+          {rawFootage && sampleTrailer && feedbackFile && !uploading && (
+            <div className="rounded-xl p-3 space-y-1.5"
+              style={{ background: 'rgba(212,168,67,0.05)', border: '1px solid rgba(212,168,67,0.15)' }}>
+              <p className="text-xs font-medium text-slate-400 mb-2">Ready to upload</p>
+              {[
+                { label: 'Raw Footage',    file: rawFootage,    icon: <Film size={11} /> },
+                { label: 'Sample Trailer', file: sampleTrailer, icon: <Clapperboard size={11} /> },
+                { label: 'Feedback',       file: feedbackFile,  icon: <MessageSquare size={11} /> },
+              ].map(({ label, file, icon }) => (
+                <div key={label} className="flex items-center gap-2 text-xs text-slate-400">
+                  <span className="text-primary">{icon}</span>
+                  <span className="font-medium text-slate-300 w-28 shrink-0">{label}</span>
+                  <span className="truncate flex-1 text-slate-500">{file.name}</span>
+                  <span className="shrink-0 flex items-center gap-1 text-slate-600">
+                    <HardDrive size={10} /> {formatFileSize(file.size)}
+                  </span>
+                </div>
               ))}
-              {userPrompt.trim() && (
-                <button
-                  type="button"
-                  onClick={() => setUserPrompt('')}
-                  className="text-xs px-2.5 py-1 rounded-full border border-red-500/20 text-red-400 hover:border-red-500/40 transition-colors ml-auto"
-                >
-                  Clear
-                </button>
-              )}
-            </div>
-          </div>
-
-          {smartUploading && smartPct > 0 && smartPct < 100 && (
-            <div className="space-y-1">
-              <div className="flex justify-between text-xs text-slate-500">
-                <span>Uploading files…</span>
-                <span>{smartPct}%</span>
-              </div>
-              <div className="h-1.5 rounded-full bg-slate-700 overflow-hidden">
-                <div
-                  className="h-full rounded-full bg-primary transition-all duration-150"
-                  style={{ width: `${smartPct}%` }}
-                />
-              </div>
             </div>
           )}
 
-          {smartUploading && smartPct >= 100 && (
-            <div className="flex items-center gap-2 text-sm text-slate-400">
-              <Loader2 size={14} className="animate-spin text-primary" />
-              Starting generation…
-            </div>
-          )}
-
+          {/* Submit */}
           <Button
-            onClick={handleSmartGenerate}
-            loading={smartUploading}
-            disabled={!canGenerate}
-            icon={<Clapperboard size={14} />}
+            onClick={handleUpload}
+            loading={uploading}
+            disabled={!canUpload}
+            icon={<Upload size={15} />}
+            className="w-full justify-center"
           >
-            {smartUploading ? 'Uploading…' : 'Generate Smart Trailer'}
+            {uploading ? 'Uploading…' : 'Upload Project'}
           </Button>
+
+          <p className="text-xs text-slate-600 text-center">
+            All three files are required. Feedback is parsed automatically.
+          </p>
         </Card>
+      </div>
+
+      {/* Success modal */}
+      {successInfo && (
+        <SuccessModal
+          projectId={successInfo.projectId}
+          datasetId={successInfo.datasetId}
+          onClose={() => setSuccessInfo(null)}
+        />
       )}
-    </div>
+    </>
   )
 }

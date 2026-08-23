@@ -1,7 +1,4 @@
-streamlit>=1.35
-streamlit-autorefresh>=1.0.1
-pandas>=2.0
-plotly>=5.20
-wordcloud>=1.9
-matplotlib>=3.8
-vaderSentiment>=3.3.2
+# All dependencies are managed from the project root.
+# Install from: C:\Users\7000039334\Documents\Gearshift\Clipsense\requirements.txt
+#
+#   pip install -r ../requirements.txt

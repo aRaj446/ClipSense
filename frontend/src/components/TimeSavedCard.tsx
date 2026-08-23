@@ -107,7 +107,7 @@ export default function TimeSavedCard({ job }: Props) {
           {
             label: 'Manual estimate',
             value: fmtHours(manual_editing_hours),
-            sub: `${(breakdown.raw_footage_duration_secs / 60).toFixed(1)} min footage × 0.5`,
+            sub: `${(breakdown.raw_footage_duration_secs / 60).toFixed(1)} min footage × 0.3 hrs/min`,
             color: '#A8A4B8',
             bg: 'linear-gradient(135deg,#A8A4B818,#A8A4B808)',
             border: '#A8A4B822',
@@ -188,7 +188,7 @@ export default function TimeSavedCard({ job }: Props) {
       {/* ── Disclaimer ── */}
       <p className="text-[10px] leading-relaxed" style={{ color: '#5C5A72' }}>
         Manual estimate: raw footage duration ({(breakdown.raw_footage_duration_secs / 60).toFixed(1)} min)
-        × 0.5 hrs/min = {manual_editing_hours.toFixed(2)} hrs.
+        × 0.3 hrs/min = {manual_editing_hours.toFixed(2)} hrs.
         ClipSense processing: {processing_hours.toFixed(2)} hrs actual.
         Actual savings vary by project complexity.
       </p>
