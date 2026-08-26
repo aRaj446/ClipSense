@@ -349,6 +349,45 @@ st.components.v1.html("""
       box-shadow:0 1px 6px rgba(0,0,0,.18);
     }
 
+    /* ── SENTIMENT FILTER PILLS (radio buttons styled as pills) ── */
+    div[data-testid="stRadio"] > div { gap: 0 !important; }
+    div[data-testid="stRadio"] > div > label {
+      padding: 7px 16px !important;
+      border-radius: 999px !important;
+      font-size: 11px !important;
+      font-weight: 600 !important;
+      letter-spacing: 0.3px !important;
+      color: #756E66 !important;
+      background: transparent !important;
+      border: 1px solid #E9E3DA !important;
+      margin-right: 6px !important;
+      transition: all 0.18s ease !important;
+      cursor: pointer !important;
+    }
+    div[data-testid="stRadio"] > div > label:hover {
+      background: rgba(244,122,32,0.06) !important;
+      border-color: rgba(244,122,32,0.3) !important;
+    }
+    div[data-testid="stRadio"] > div > label[data-checked="true"],
+    div[data-testid="stRadio"] > div > label:has(input:checked) {
+      background: #F47A20 !important;
+      color: #fff !important;
+      border-color: #F47A20 !important;
+      box-shadow: 0 2px 8px rgba(244,122,32,0.3) !important;
+    }
+    div[data-testid="stRadio"] > div > label > div:first-child {
+      display: none !important; /* hide the radio circle */
+    }
+    div[data-testid="stRadio"] > div > label p {
+      font-size: 11px !important;
+      margin: 0 !important;
+      color: #756E66 !important;
+    }
+    div[data-testid="stRadio"] > div > label[data-checked="true"] p,
+    div[data-testid="stRadio"] > div > label:has(input:checked) p {
+      color: #fff !important;
+    }
+
     /* ── NATIVE CONTROLS ── */
     div[data-baseweb='select']>div {
       border-radius:10px!important; border-color:var(--border)!important;
@@ -1065,6 +1104,36 @@ with tabs[0]:
         unsafe_allow_html=True,
     )
 
+    # ── Sentiment filter pills ───────────────────────────────────────────────
+    if "sentiment_filter" not in st.session_state:
+        st.session_state["sentiment_filter"] = "All"
+    _filter_cols = st.columns([1, 4, 1])
+    with _filter_cols[1]:
+        _filter_choice = st.radio(
+            "Filter by sentiment",
+            ["All", "Positive", "Neutral", "Negative"],
+            horizontal=True,
+            index=["All", "Positive", "Neutral", "Negative"].index(st.session_state["sentiment_filter"]),
+            label_visibility="collapsed",
+            key="_sent_filter_radio",
+        )
+        if _filter_choice != st.session_state["sentiment_filter"]:
+            st.session_state["sentiment_filter"] = _filter_choice
+            st.rerun()
+
+    # Apply sentiment filter
+    if st.session_state["sentiment_filter"] != "All":
+        fdf = fdf[fdf["sentiment_label"] == st.session_state["sentiment_filter"]].copy()
+        if fdf.empty:
+            st.info(f"No {st.session_state['sentiment_filter'].lower()} feedback found.")
+            st.stop()
+
+    # Recompute stats after filter
+    total          = len(fdf)
+    positive       = (fdf["sentiment_label"] == "Positive").mean() * 100
+    active_regions = fdf["country"].nunique()
+    engagement     = fdf["engagement"].sum()
+
     # ── KPI strip — single components.html for full styling control ─────────
     num_platforms = fdf["platform"].nunique()
     _pos_raw = positive
@@ -1391,7 +1460,39 @@ with tabs[0]:
         for r in top_regions.itertuples(index=False)
     )
 
+    # Build topic sentiment bar chart for the orange card
+    _theme_col = "theme" if "theme" in fdf.columns else None
+    topic_bars_html = ""
+    if _theme_col:
+        _ts_card = fdf.groupby(_theme_col)["sentiment_label"].value_counts().unstack(fill_value=0).reset_index()
+        for _c in ["Positive", "Neutral", "Negative"]:
+            if _c not in _ts_card.columns:
+                _ts_card[_c] = 0
+        _ts_card["total"] = _ts_card["Positive"] + _ts_card["Neutral"] + _ts_card["Negative"]
+        _ts_card = _ts_card.sort_values("total", ascending=True).tail(7)
+
+        for _, row in _ts_card.iterrows():
+            t_total = int(row["total"])
+            t_pos = int(row["Positive"])
+            t_neu = int(row["Neutral"])
+            t_neg = int(row["Negative"])
+            pos_w = (t_pos / t_total * 100) if t_total else 0
+            neu_w = (t_neu / t_total * 100) if t_total else 0
+            neg_w = (t_neg / t_total * 100) if t_total else 0
+            topic_bars_html += f"""
+            <div class='tb-row'>
+              <span class='tb-name'>{html.escape(str(row[_theme_col]))}</span>
+              <div class='tb-bar'>
+                <div class='tb-seg tb-pos' style='width:{pos_w:.1f}%'></div>
+                <div class='tb-seg tb-neu' style='width:{neu_w:.1f}%'></div>
+                <div class='tb-seg tb-neg' style='width:{neg_w:.1f}%'></div>
+              </div>
+              <span class='tb-count'>{t_total}</span>
+            </div>"""
+
     pos_count = int((fdf["sentiment_label"] == "Positive").sum())
+    neg_count = int((fdf["sentiment_label"] == "Negative").sum())
+    neu_count = total - pos_count - neg_count
 
     with left:
         st.html(f"""
@@ -1404,123 +1505,82 @@ with tabs[0]:
     border-radius:20px;
     overflow:hidden;
     position:relative;
-    padding:24px 26px 22px;
+    padding:28px 28px 24px;
     background:
-      radial-gradient(ellipse at 15% 0%,   rgba(255,180,80,.18) 0, transparent 45%),
-      radial-gradient(ellipse at 90% 85%,  rgba(160,40,0,.35)   0, transparent 50%),
+      radial-gradient(ellipse at 15% 0%, rgba(255,180,80,.18) 0, transparent 45%),
+      radial-gradient(ellipse at 90% 85%, rgba(160,40,0,.35) 0, transparent 50%),
       linear-gradient(158deg, #F68A22 0%, #F47A20 38%, #E06018 68%, #C85010 100%);
     box-shadow: 0 8px 32px rgba(180,70,10,.18), 0 1px 0 rgba(255,200,100,.12) inset;
     display:flex;
     flex-direction:column;
   }}
 
-  /* subtle dot-grid texture — removed, adds noise without information */
-
-  /* header */
   .head{{position:relative;z-index:3;flex-shrink:0}}
-  .kicker{{
-    font-size:10px;font-weight:600;letter-spacing:1.2px;
-    text-transform:uppercase;opacity:.72;
-  }}
-  .ttl{{
-    font-size:21px;font-weight:700;margin-top:4px;letter-spacing:-.45px;line-height:1.1;
-  }}
-  .meta{{
-    font-size:11px;font-weight:400;opacity:.65;margin-top:4px;
-  }}
+  .kicker{{font-size:10px;font-weight:600;letter-spacing:1.2px;text-transform:uppercase;opacity:.72}}
+  .ttl{{font-size:21px;font-weight:700;margin-top:4px;letter-spacing:-.45px;line-height:1.1}}
+  .meta{{font-size:11px;font-weight:400;opacity:.65;margin-top:4px}}
 
-  /* map container */
-  .mapwrap{{
-    position:relative;z-index:2;
-    flex:1;min-height:0;
-    margin:14px -6px 0;
-    border-radius:12px;
-    overflow:hidden;
-  }}
-  .mapwrap .js-plotly-plot,
-  .mapwrap .plot-container{{
-    width:100%!important;
-    height:100%!important;
-  }}
+  .sep{{height:1px;background:rgba(255,255,255,.15);margin:16px 0}}
 
-  /* pulse rings on scatter markers — CSS only, fires once */
-  @keyframes pulse{{
-    0%  {{ transform:scale(1);   opacity:.7 }}
-    60% {{ transform:scale(2.4); opacity:0  }}
-    100%{{ transform:scale(2.4); opacity:0  }}
-  }}
-  .marker-pulse{{
-    position:absolute;
-    width:10px;height:10px;
-    border-radius:50%;
-    background:rgba(255,255,255,.55);
-    animation:pulse 3s ease-out infinite;
-    pointer-events:none;
-  }}
+  /* Topic bar chart */
+  .tb-section{{flex:1;display:flex;flex-direction:column;justify-content:center;gap:10px;position:relative;z-index:2}}
+  .tb-row{{display:grid;grid-template-columns:100px 1fr 36px;align-items:center;gap:12px}}
+  .tb-name{{font-size:12px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;opacity:.92}}
+  .tb-bar{{height:10px;border-radius:6px;background:rgba(255,255,255,.15);overflow:hidden;display:flex}}
+  .tb-seg{{height:100%;transition:width 0.6s ease}}
+  .tb-pos{{background:rgba(255,255,255,.92)}}
+  .tb-neu{{background:rgba(255,255,255,.45)}}
+  .tb-neg{{background:rgba(80,0,0,.6)}}
+  .tb-count{{font-size:11px;font-weight:600;text-align:right;opacity:.75}}
 
-  /* divider */
-  .sep{{height:1px;background:rgba(255,255,255,.14);margin:14px 0 10px;flex-shrink:0;position:relative;z-index:3}}
+  /* Legend */
+  .legend{{display:flex;gap:14px;margin-top:16px;flex-wrap:wrap}}
+  .leg-item{{display:flex;align-items:center;gap:5px;font-size:10px;opacity:.8}}
+  .leg-dot{{width:8px;height:8px;border-radius:3px;flex-shrink:0}}
 
-  /* region rows */
-  .regions{{position:relative;z-index:3;flex-shrink:0}}
-  .rr{{
-    display:grid;
-    grid-template-columns:110px 1fr 42px;
-    align-items:center;
-    gap:10px;
-    padding:5px 0;
-  }}
-  .rr+.rr{{border-top:1px solid rgba(255,255,255,.09)}}
-  .rn{{font-size:11px;font-weight:500;opacity:.9;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}}
-  .rb-wrap{{position:relative}}
-  .rb{{
-    height:5px;border-radius:5px;
-    background:rgba(255,255,255,.16);
-    overflow:hidden;
-  }}
-  .rf{{
-    height:100%;border-radius:5px;
-    background:rgba(255,255,255,.88);
-    width:0;
-    animation:barGrow 900ms cubic-bezier(.22,.61,.36,1) forwards;
-    animation-delay:200ms;
-  }}
-  @keyframes barGrow{{to{{width:var(--w)}}}}
-  .rpct{{font-size:11px;font-weight:640;text-align:right;opacity:.95}}
+  /* Stats row */
+  .stats{{display:flex;gap:0;margin-top:auto;padding-top:16px;border-top:1px solid rgba(255,255,255,.12)}}
+  .stat{{flex:1;text-align:center;padding:8px 0}}
+  .stat+.stat{{border-left:1px solid rgba(255,255,255,.12)}}
+  .stat-val{{font-size:20px;font-weight:700;letter-spacing:-.5px}}
+  .stat-lbl{{font-size:9px;font-weight:600;letter-spacing:.4px;text-transform:uppercase;opacity:.6;margin-top:3px}}
 
-  /* ── ≤1280 : slightly shorter card ── */
-  @media(max-width:1280px){{
-    .card{{min-height:480px;padding:20px 22px 18px}}
-  }}
-
-  /* ── ≤1024 : compact card, narrow region label ── */
   @media(max-width:1024px){{
-    .card{{min-height:400px;padding:18px 18px 16px}}
-    .rr{{grid-template-columns:80px 1fr 38px;gap:8px}}
+    .card{{min-height:480px;padding:20px}}
+    .tb-row{{grid-template-columns:80px 1fr 32px;gap:8px}}
     .ttl{{font-size:18px}}
   }}
-
-  /* ── ≤768 : stacked full-width, restore comfortable height ── */
   @media(max-width:768px){{
-    .card{{min-height:360px;padding:16px 16px 14px}}
-    .rr{{grid-template-columns:80px 1fr 36px;gap:7px}}
-    .ttl{{font-size:17px}}
-    .meta{{font-size:10px}}
+    .card{{min-height:400px;padding:18px}}
+    .tb-row{{grid-template-columns:70px 1fr 30px;gap:7px}}
   }}
 </style>
 
 <div class='card'>
   <div class='head'>
-    <div class='kicker'>Global Sentiment</div>
-    <div class='ttl'>Top regions by sentiment</div>
-    <div class='meta'>{active_regions} active regions &nbsp;·&nbsp; {pos_count:,} positive mentions</div>
+    <div class='kicker'>Sentiment Analysis</div>
+    <div class='ttl'>Sentiment by topic</div>
+    <div class='meta'>{len(_ts_card) if _theme_col else 0} topics &nbsp;·&nbsp; {total:,} total mentions</div>
   </div>
-
-  <div class='mapwrap'>{map_html}</div>
 
   <div class='sep'></div>
 
-  <div class='regions'>{top_region_html}</div>
+  <div class='tb-section'>
+    {topic_bars_html if topic_bars_html else "<div style='text-align:center;opacity:.6;padding:40px 0;font-size:13px;'>No topic data available</div>"}
+  </div>
+
+  <div class='legend'>
+    <span class='leg-item'><span class='leg-dot' style='background:rgba(255,255,255,.92)'></span>Positive ({pos_count})</span>
+    <span class='leg-item'><span class='leg-dot' style='background:rgba(255,255,255,.45)'></span>Neutral ({neu_count})</span>
+    <span class='leg-item'><span class='leg-dot' style='background:rgba(80,0,0,.6)'></span>Negative ({neg_count})</span>
+  </div>
+
+  <div class='stats'>
+    <div class='stat'><div class='stat-val'>{pos_count}</div><div class='stat-lbl'>Positive</div></div>
+    <div class='stat'><div class='stat-val'>{neu_count}</div><div class='stat-lbl'>Neutral</div></div>
+    <div class='stat'><div class='stat-val'>{neg_count}</div><div class='stat-lbl'>Negative</div></div>
+    <div class='stat'><div class='stat-val'>{total}</div><div class='stat-lbl'>Total</div></div>
+  </div>
 </div>
         """)
 
@@ -1738,6 +1798,135 @@ with tabs[0]:
         """)
 
     st.markdown("<div style='height:20px;line-height:0'>&nbsp;</div>", unsafe_allow_html=True)
+
+    # ── Sentiment Charts (Pie + Topic Bar) ───────────────────────────────────
+    _chart_css = f"""
+      *{{box-sizing:border-box;margin:0;padding:0}}
+      html,body{{height:100%;background:transparent;font-family:Inter,-apple-system,sans-serif;overflow:hidden}}
+      .card{{background:#fff;border:1px solid {BORDER};border-radius:16px;
+             padding:22px 24px 18px;box-shadow:0 2px 12px rgba(50,40,30,.07);
+             display:flex;flex-direction:column;overflow:hidden;}}
+      .title{{font-size:13px;font-weight:680;color:{TEXT};letter-spacing:-.1px}}
+      .sub{{font-size:11px;font-weight:400;color:{MUTED};margin-top:3px;line-height:1.5}}
+      .divider{{height:1px;background:{BORDER};margin:12px 0 10px;flex-shrink:0}}
+      .plot-wrap{{width:100%;overflow:hidden;flex-shrink:0}}
+      .plot-wrap>div{{width:100%!important;height:100%!important;}}
+      .legend{{display:flex;flex-wrap:wrap;gap:10px;margin-top:8px;justify-content:center;}}
+      .leg-item{{display:flex;align-items:center;gap:5px;font-size:11px;color:{MUTED};}}
+      .leg-dot{{width:8px;height:8px;border-radius:50%;flex-shrink:0;}}
+    """
+
+    # Sentiment Distribution Pie
+    _sent_counts = fdf["sentiment_label"].value_counts()
+    _pie_data = [(lbl, int(_sent_counts.get(lbl, 0))) for lbl in ["Positive", "Neutral", "Negative"] if _sent_counts.get(lbl, 0) > 0]
+    _pie_colors = {"Positive": ORANGE, "Neutral": GRAY, "Negative": DARK}
+
+    fig_pie = go.Figure(go.Pie(
+        labels=[p[0] for p in _pie_data],
+        values=[p[1] for p in _pie_data],
+        hole=0.55,
+        marker=dict(colors=[_pie_colors.get(p[0], GRAY) for p in _pie_data], line=dict(color="#fff", width=2)),
+        textposition="inside", textinfo="percent",
+        textfont=dict(size=12, color="#fff"),
+        hovertemplate="<b>%{label}</b><br>%{value} mentions &nbsp;·&nbsp; %{percent}<extra></extra>",
+        sort=False,
+    ))
+    fig_pie.update_layout(
+        height=240, margin=dict(l=10, r=10, t=10, b=10),
+        showlegend=False, paper_bgcolor="rgba(0,0,0,0)",
+        hoverlabel=dict(bgcolor="#fff", bordercolor=BORDER,
+                        font_size=12, font_family=_SC["font"], font_color=TEXT),
+    )
+    pie_html = _strip_plotly_size(fig_pie.to_html(full_html=False, include_plotlyjs="cdn", config={"displayModeBar": False, "responsive": True}))
+
+    pie_legend = ""
+    for lbl, cnt in _pie_data:
+        pct = cnt / total * 100 if total > 0 else 0
+        pie_legend += f"<span class='leg-item'><span class='leg-dot' style='background:{_pie_colors.get(lbl, GRAY)}'></span>{lbl}: {cnt} ({pct:.0f}%)</span>"
+
+    # Topic Sentiment Bar
+    _theme_col = "theme" if "theme" in fdf.columns else None
+    topic_chart_html = ""
+    if _theme_col:
+        _ts = fdf.groupby(_theme_col)["sentiment_label"].value_counts().unstack(fill_value=0).reset_index()
+        for _c in ["Positive", "Neutral", "Negative"]:
+            if _c not in _ts.columns:
+                _ts[_c] = 0
+        _ts["total"] = _ts["Positive"] + _ts["Neutral"] + _ts["Negative"]
+        _ts = _ts.sort_values("total", ascending=True).tail(8)
+
+        fig_topic = go.Figure()
+        fig_topic.add_trace(go.Bar(y=_ts[_theme_col], x=_ts["Positive"], name="Positive", orientation="h", marker_color=ORANGE))
+        fig_topic.add_trace(go.Bar(y=_ts[_theme_col], x=_ts["Neutral"], name="Neutral", orientation="h", marker_color=GRAY))
+        fig_topic.add_trace(go.Bar(y=_ts[_theme_col], x=_ts["Negative"], name="Negative", orientation="h", marker_color=DARK))
+        fig_topic.update_layout(barmode="stack")
+        style_plotly(fig_topic, height=280, margin=dict(l=100, r=16, t=8, b=24), show_legend=True, xgrid=True, ygrid=False)
+        fig_topic.update_yaxes(automargin=True)
+        topic_chart_html = _strip_plotly_size(fig_topic.to_html(full_html=False, include_plotlyjs="cdn", config={"displayModeBar": False, "responsive": True}))
+
+    ch1, ch2 = st.columns(2, gap="medium")
+    with ch1:
+        components.html(f"""
+<style>{_chart_css} .plot-wrap{{height:240px;}}</style>
+<div class="card">
+  <div class="title">Sentiment Distribution</div>
+  <div class="sub">Breakdown of positive, neutral, and negative feedback</div>
+  <div class="divider"></div>
+  <div class="plot-wrap">{pie_html}</div>
+  <div class="legend">{pie_legend}</div>
+</div>""", height=420, scrolling=False)
+
+    with ch2:
+        if topic_chart_html:
+            components.html(f"""
+<style>{_chart_css} .plot-wrap{{height:280px;}}</style>
+<div class="card">
+  <div class="title">Sentiment by Topic</div>
+  <div class="sub">Stacked positive, neutral, negative per topic</div>
+  <div class="divider"></div>
+  <div class="plot-wrap">{topic_chart_html}</div>
+</div>""", height=420, scrolling=False)
+
+    st.markdown("<div style='height:12px;line-height:0'>&nbsp;</div>", unsafe_allow_html=True)
+
+    # ── Sentiment Velocity (if data exists) ──────────────────────────────────
+    if cs_mode and not fdf.empty:
+        # Build velocity from video_timestamp if available
+        _has_vts = "video_timestamp" in fdf.columns and fdf["video_timestamp"].notna().any()
+        if _has_vts:
+            _vdf = fdf[fdf["video_timestamp"].notna()].copy()
+            def _parse_ts(t):
+                try:
+                    parts = str(t).split(":")
+                    return int(parts[0]) if len(parts) >= 1 else 0
+                except:
+                    return 0
+            _vdf["_min"] = _vdf["video_timestamp"].apply(_parse_ts)
+            _vel = _vdf.groupby(["_min", "sentiment_label"]).size().unstack(fill_value=0).reset_index()
+            for _c in ["Positive", "Neutral", "Negative"]:
+                if _c not in _vel.columns:
+                    _vel[_c] = 0
+            _vel["Net"] = _vel["Positive"] - _vel["Negative"]
+            _vel = _vel.rename(columns={"_min": "minute"})
+
+            if len(_vel) >= 2:
+                fig_vel = go.Figure()
+                fig_vel.add_trace(go.Scatter(x=_vel["minute"], y=_vel["Positive"], mode="lines", name="Positive", line=dict(color="#55A88B", width=2)))
+                fig_vel.add_trace(go.Scatter(x=_vel["minute"], y=_vel["Negative"], mode="lines", name="Negative", line=dict(color="#E74C3C", width=2)))
+                fig_vel.add_trace(go.Scatter(x=_vel["minute"], y=_vel["Net"], mode="lines", name="Net", line=dict(color=ORANGE, width=2, dash="dash")))
+                style_plotly(fig_vel, height=200, margin=dict(l=36, r=16, t=8, b=32), show_legend=True, xgrid=False)
+                vel_html = _strip_plotly_size(fig_vel.to_html(full_html=False, include_plotlyjs="cdn", config={"displayModeBar": False, "responsive": True}))
+
+                components.html(f"""
+<style>{_chart_css} .plot-wrap{{height:200px;}}</style>
+<div class="card">
+  <div class="title">Sentiment Velocity</div>
+  <div class="sub">Reactions per minute — Net (dashed) = positive minus negative</div>
+  <div class="divider"></div>
+  <div class="plot-wrap">{vel_html}</div>
+</div>""", height=340, scrolling=False)
+
+                st.markdown("<div style='height:12px;line-height:0'>&nbsp;</div>", unsafe_allow_html=True)
 
     # ── Bottom 3 cards ───────────────────────────────────────────────────────
     # ── Build bottom card data before rendering ──────────────────────────────

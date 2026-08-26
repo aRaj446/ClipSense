@@ -6,9 +6,9 @@
     "kill:frontend": "for /f \"tokens=5\" %a in ('netstat -ano ^| findstr :5173 ^| findstr LISTENING') do taskkill /pid %a /f /t 2>nul",
     "kill:sensecap": "taskkill /f /t /im streamlit.exe 2>nul & for /f \"tokens=5\" %a in ('netstat -ano ^| findstr :8501 ^| findstr LISTENING') do taskkill /pid %a /f /t 2>nul",
     "kill:openreel": "for /f \"tokens=5\" %a in ('netstat -ano ^| findstr :5176 ^| findstr LISTENING') do taskkill /pid %a /f /t 2>nul",
-    "backend": "npm run kill:backend 2>nul & cd backend && C:\\Users\\7000039334\\Documents\\Gearshift\\Clipsense\\backend\\venv\\Scripts\\uvicorn.exe app.main:app --host 0.0.0.0 --port 8000",
+    "backend": "npm run kill:backend 2>nul & cd backend && python -m uvicorn app.main:app --host 0.0.0.0 --port 8000",
     "frontend": "npm run kill:frontend 2>nul & cd frontend && npm run dev",
-    "sensecap": "npm run kill:sensecap 2>nul & cd sensecap_dashboard_v4_expanded && ..\\venv\\Scripts\\streamlit.exe run app.py --server.port 8501",
+    "sensecap": "npm run kill:sensecap 2>nul & cd sensecap_dashboard_v4_expanded && python -m streamlit run app.py --server.port 8501",
     "openreel": "npm run kill:openreel 2>nul & cd VideoEditor\\openreel-video && pnpm --filter @openreel/web exec vite --port 5176 --host 0.0.0.0",
     "dev": "start cmd /k npm run backend && start cmd /k npm run sensecap && start cmd /k npm run openreel && npm run frontend"
   }

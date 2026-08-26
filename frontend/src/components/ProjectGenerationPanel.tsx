@@ -22,6 +22,60 @@ const CREATIVE_CHIPS = [
   'More character moments',
 ]
 
+/**
+ * Generate smart prompt suggestions derived from the analytics report insights.
+ * These are data-driven, not hardcoded — they change based on what the
+ * audience feedback actually says.
+ */
+function generateSmartPrompts(status: ProjectAnalyticsStatus | null): string[] {
+  if (!status || !status.has_analytics || status.segment_count === 0) {
+    // Fallback: use generic creative chips when no analytics available
+    return CREATIVE_CHIPS.slice(0, 3)
+  }
+
+  const total = status.segment_count
+  const posPct = Math.round((status.positive / total) * 100)
+  const negPct = Math.round((status.negative / total) * 100)
+  const topTopic = status.top_topic ?? 'key moments'
+
+  const prompts: string[] = []
+
+  // Prompt 1: Leverage the strongest positive signal
+  if (posPct >= 40) {
+    prompts.push(
+      `Emphasize ${topTopic} scenes — ${posPct}% of audience feedback is positive about this. Create an emotionally compelling cut that highlights what resonates most.`
+    )
+  } else {
+    prompts.push(
+      `Focus on the strongest positive moments from the footage. ${posPct}% positive feedback suggests highlighting ${topTopic} for maximum audience engagement.`
+    )
+  }
+
+  // Prompt 2: Address negative feedback by avoiding weak points
+  if (negPct > 10) {
+    prompts.push(
+      `Create a fast-paced, high-energy trailer. Audience data shows ${negPct}% negative reactions — minimize slow pacing and keep the momentum tight with quick cuts and impactful moments.`
+    )
+  } else {
+    prompts.push(
+      `Build a cinematic trailer with strong emotional beats. Only ${negPct}% negative feedback — the content quality is high, so let the visuals breathe and create anticipation.`
+    )
+  }
+
+  // Prompt 3: Balanced approach using the overall sentiment
+  if (posPct > negPct * 3) {
+    prompts.push(
+      `Audience loves this content (${posPct}% positive). Create a trailer that captures the essence of what makes ${topTopic} special — focus on the moments that generate the strongest emotional response.`
+    )
+  } else {
+    prompts.push(
+      `Mixed audience sentiment (${posPct}% positive, ${negPct}% negative). Create a trailer that leads with the strongest moments, builds curiosity, and ends on a high note to shift perception positively.`
+    )
+  }
+
+  return prompts
+}
+
 function fmt(secs: number) {
   const m = Math.floor(secs / 60)
   const s = Math.floor(secs % 60)
@@ -469,18 +523,25 @@ export default function ProjectGenerationPanel({ project }: Props) {
             onBlur={e => (e.target.style.borderColor = isRegeneration && !prompt.trim() ? '#F8717140' : '#252538')}
           />
           <div className="flex flex-wrap gap-1.5">
-            {CREATIVE_CHIPS.map(chip => (
+            {generateSmartPrompts(status).map((smartPrompt, idx) => (
               <button
-                key={chip}
+                key={idx}
                 type="button"
                 disabled={!!activeJobId}
-                onClick={() => setPrompt(p => p.trim() ? p.trimEnd() + '. ' + chip : chip)}
-                className="text-xs px-2 py-0.5 rounded-full border transition-colors disabled:opacity-40"
-                style={{ borderColor: '#252538', color: '#5C5A72' }}
-                onMouseEnter={e => { (e.target as HTMLElement).style.color = '#D4A843'; (e.target as HTMLElement).style.borderColor = '#D4A84340' }}
-                onMouseLeave={e => { (e.target as HTMLElement).style.color = '#5C5A72'; (e.target as HTMLElement).style.borderColor = '#252538' }}
+                onClick={() => setPrompt(smartPrompt)}
+                className="text-left text-xs px-3 py-2 rounded-lg border transition-all disabled:opacity-40 hover:border-[#8B7CF660] group"
+                style={{ borderColor: '#252538', color: '#A8A4B8', background: '#0E0E1A', maxWidth: '100%' }}
+                title="Click to use this suggestion (you can edit it after)"
               >
-                {chip}
+                <span className="flex items-center gap-1.5 mb-0.5">
+                  <span style={{ color: '#8B7CF6', fontSize: '10px' }}>✦</span>
+                  <span className="font-semibold" style={{ color: '#D4A843', fontSize: '10px' }}>
+                    AI Suggestion {idx + 1}
+                  </span>
+                </span>
+                <span className="line-clamp-2 leading-relaxed" style={{ color: '#A8A4B8' }}>
+                  {smartPrompt.length > 120 ? smartPrompt.slice(0, 120) + '…' : smartPrompt}
+                </span>
               </button>
             ))}
           </div>
