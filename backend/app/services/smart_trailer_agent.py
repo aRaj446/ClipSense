@@ -45,7 +45,7 @@ from app.utils.ffmpeg_composer import compose, AudioSettings as ComposerAudioSet
 
 logger = logging.getLogger(__name__)
 
-MIN_NO_SPEECH = 3.0  # seconds — minimum duration for non-dialogue clips
+MIN_NO_SPEECH = 6.0  # seconds — minimum duration for non-dialogue clips (matches MIN_CLIP_DURATION)
 
 _POSITIVE_SENTIMENTS = {"Positive", "Praise"}
 _NEGATIVE_SENTIMENTS = {"Negative", "Complaint"}
@@ -62,12 +62,12 @@ _NEGATIVE_SENTIMENTS = {"Negative", "Complaint"}
 #
 # Scoring contract (applied in scene_score):
 #   creative_bias = sum(pref * CREATIVE_BIAS_WEIGHT for matching dims)
-#   CREATIVE_BIAS_WEIGHT = 0.4  (max ±0.4 per dimension)
-#   This keeps creative bias bounded well below the base sentiment score (2.0)
-#   so strong audience sentiment always dominates unless the editor explicitly
-#   overrides a dimension.
+#   CREATIVE_BIAS_WEIGHT = 1.0  (max ±1.0 per dimension, ±3.0 total)
+#   Raised from 0.4 so creative direction prompts can meaningfully shift
+#   scene selection. With dialogue score reduced to 1.0, a strong creative
+#   prompt (+3.0 bias) can now override dialogue preference entirely.
 
-CREATIVE_BIAS_WEIGHT = 0.4  # max contribution per matched dimension
+CREATIVE_BIAS_WEIGHT = 1.0  # max contribution per matched dimension (raised from 0.4 to make prompts effective)
 
 class CreativePreferences:
     """Normalised creative direction parsed from a free-form editor prompt."""
@@ -403,13 +403,21 @@ def _plan_clips_from_raw(
         # Humour: no structural signal available — log but don't fabricate a score
         # (humour is a tonal quality that cannot be detected from scene boundaries alone)
 
-        bias = max(-1.2, min(1.2, bias))
+        bias = max(-3.0, min(3.0, bias))
         return bias, " + ".join(parts)
 
     def scene_score(scene: dict, mood: str = "calm") -> tuple[float, str]:
         """
         Returns (total_score, reason_string).
         Reason string explains which factors contributed.
+
+        Scoring layers:
+            dialogue presence:     +1.0 (reduced from 2.0 so non-dialogue scenes can compete)
+            positive topic match:  +1.5 (feedback-driven — different feedback = different scores)
+            negative topic match:  -1.5 (feedback-driven — penalises scenes audiences disliked)
+            beat alignment:        +0.5
+            duration fit:          +0.5
+            creative bias:         max ±3.0 (from editor prompt, raised weight)
         """
         score = 0.0
         reason_parts: list[str] = []
@@ -418,10 +426,31 @@ def _plan_clips_from_raw(
         clip_text  = get_transcript_text(scene["start_time"], scene["end_time"], transcript)
         has_speech = bool(clip_text.strip())
 
-        # Base: dialogue presence
+        # Base: dialogue presence (reduced from 2.0 to 1.0 so action/VFX scenes can compete)
         if has_speech:
-            score += 2.0
+            score += 1.0
             reason_parts.append("dialogue scene")
+
+        # Sentiment: positive topic boost — different feedback = different top scenes
+        if has_speech and pos_topics:
+            text_lower = clip_text.lower()
+            matched = [t for t in pos_topics if t.lower() in text_lower]
+            if matched:
+                score += 1.5
+                reason_parts.append(f"matches positive audience topic: {matched[0]}")
+
+        # Sentiment: negative topic penalty — actively excludes scenes audiences disliked
+        if has_speech and neg_patterns:
+            text_lower = clip_text.lower()
+            for pat in neg_patterns:
+                neg_topic = pat.replace("Negative audience response to ", "").replace(" segments", "").strip()
+                if neg_topic and neg_topic.lower() in text_lower:
+                    score -= 1.5
+                    reason_parts.append(f"penalised: negative audience response to {neg_topic}")
+                    break
+                if "slow" in pat.lower() and scene["duration"] > 20.0:
+                    score -= 0.5
+                    reason_parts.append("penalised: slow pacing pattern")
 
         # Base: beat alignment
         if any(abs(scene["start_time"] - b) <= 0.5 for b in strong_beats):
@@ -433,11 +462,14 @@ def _plan_clips_from_raw(
             score += 0.5
             reason_parts.append("good duration")
 
-        # Sentiment: negative pattern penalty
-        for pat in neg_patterns:
-            if "slow" in pat.lower() and scene["duration"] > 20.0:
-                score -= 0.5
-                reason_parts.append("penalised: slow pacing pattern")
+        # Sentiment: negative pattern penalty (legacy — kept for backwards compat)
+        # Only fires for non-speech scenes that are excessively long
+        if not has_speech and scene["duration"] > 20.0:
+            for pat in neg_patterns:
+                if "slow" in pat.lower():
+                    score -= 0.5
+                    reason_parts.append("penalised: long non-dialogue scene")
+                    break
 
         # Creative bias layer
         bias, bias_explanation = _creative_bias(scene, mood)
@@ -488,25 +520,37 @@ def _plan_clips_from_raw(
         has_speech = bool(clip_text.strip())
 
         if has_speech:
+            # Dialogue clip — expand to cover the FULL sentence so speech is never cut.
             d_start, d_end = get_dialogue_window(
                 scene["start_time"], scene["end_time"], transcript
             )
             snapped_start = min(scene["start_time"], d_start) if d_start is not None else scene["start_time"]
             snapped_end   = max(scene["end_time"],   d_end)   if d_end   is not None else scene["end_time"]
+            # Tail hold: add a short pause (0.4s) after speech ends so the line
+            # fully lands before the crossfade begins — prevents clipped dialogue.
+            snapped_end = min(raw_duration, snapped_end + 0.4)
         else:
-            snapped_start = find_nearest_beat(scene["start_time"], all_beats, tolerance=0.4)
-            snapped_end   = scene["end_time"]
+            # Non-dialogue clip — snap BOTH start and end to beats so the scene
+            # plays out in sync with the music and cuts on a musical beat.
+            snapped_start = find_nearest_beat(scene["start_time"], all_beats, tolerance=0.5)
+            snapped_end   = find_nearest_beat(scene["end_time"],   all_beats, tolerance=0.5)
             if snapped_end - snapped_start < MIN_NO_SPEECH:
+                # Beat-snapping made it too short — revert to original scene bounds
                 snapped_start = scene["start_time"]
+                snapped_end   = scene["end_time"]
 
         snapped_start = max(0.0, snapped_start)
         snapped_end   = min(raw_duration, snapped_end)
 
+        # Budget check: do NOT trim a scene mid-content. Either the whole scene
+        # fits (with a small tolerance to let it complete), or we skip it and
+        # continue looking for a shorter scene that fits the remaining budget.
         remaining = target_duration - total
         clip_dur  = snapped_end - snapped_start
-        min_dur   = MIN_NO_SPEECH if not has_speech else clip_dur
-        if clip_dur > remaining and remaining >= min_dur:
-            snapped_end = snapped_start + remaining
+        # Allow up to 4s overflow so a scene always plays out completely rather
+        # than being chopped. If the scene is far larger than the budget, skip it.
+        if clip_dur > remaining + 4.0:
+            continue
 
         top_topic = (pos_topics_list[0] if pos_topics_list else "General") if has_speech else "General"
         sentiment = "Positive" if sc_score >= 1.0 else ("Neutral" if sc_score >= 0.5 else "Negative")
@@ -774,13 +818,11 @@ class SmartTrailerAgent:
             )
             for c in plan_raw["clips"]
         ]
-        # Sort chronologically so FFmpeg extracts in timeline order
-        planned.sort(key=lambda c: c.start_time)
-        # Mood classification only — for transition selection
+        # Mood classification — determines narrative arc position for each clip
         planned = classify_clips_by_mood(planned, raw_footage_path)
-        # Force last clip to action mood for energetic ending
-        if planned:
-            planned[-1].mood_group = "action"
+        # Reorder by narrative arc: hook (action) → build (emotional) → resolve (dialogue) → calm
+        from app.utils.clip_planner import reorder_by_mood
+        planned = reorder_by_mood(planned)
 
         if not planned:
             return None, None, analysis, "No clips remained after processing.", platform, clip_score, False, None, raw_duration

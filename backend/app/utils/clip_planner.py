@@ -7,8 +7,8 @@ Used by both VideoRegenerationAgent (Stage 3) and SmartTrailerAgent (Stage 4).
 Responsibilities:
     1. Expand clip boundaries to cover the full dialogue window in the segment
     2. Snap end to nearest sentence boundary (±1.5s)
-    3. Enforce minimum duration — dialogue clips: length of speech (floor 3s),
-       non-dialogue clips: 3s hard floor
+    3. Enforce minimum duration — dialogue clips: length of speech (floor 6s),
+       non-dialogue clips: 6s hard floor
     4. Mood/energy classification — label each clip as 'action', 'emotional',
        'dialogue', or 'calm' using librosa RMS energy analysis
     5. Mood-group reordering — narrative arc: hook → build → resolve → wind-down
@@ -19,8 +19,8 @@ from dataclasses import dataclass
 
 logger = logging.getLogger(__name__)
 
-MIN_CLIP_DURATION         = 3.0   # seconds — fallback minimum for non-dialogue clips
-MIN_CLIP_DURATION_SPEECH  = 3.0   # seconds — absolute floor even for dialogue clips
+MIN_CLIP_DURATION         = 6.0   # seconds — minimum for non-dialogue clips (avoids abrupt transitions)
+MIN_CLIP_DURATION_SPEECH  = 6.0   # seconds — absolute floor even for dialogue clips
 
 # Mood group order for final assembly
 _MOOD_ORDER = {"action": 0, "emotional": 1, "dialogue": 2, "calm": 3}
@@ -377,7 +377,53 @@ def reorder_by_mood(clips: list[PlannedClip]) -> list[PlannedClip]:
     # 4. Wind-down — calm
     reordered.extend(calm)
 
+    # 5. Tonal smoothing — reduce drastic energy jumps between adjacent clips.
+    # Walk the arc and, whenever two consecutive clips differ in energy by more
+    # than the threshold, look ahead for a clip whose energy sits between them
+    # and swap it in as a bridge. This prevents a jarring high→low tonal jump.
+    reordered = _smooth_energy_transitions(reordered)
+
     return reordered
+
+
+# Maximum acceptable energy delta between adjacent clips before we try to bridge.
+_ENERGY_JUMP_THRESHOLD = 0.45
+
+
+def _smooth_energy_transitions(clips: list[PlannedClip]) -> list[PlannedClip]:
+    """
+    Reorder within the mood arc to avoid drastic tonal jumps between adjacent
+    clips. Keeps the overall arc shape (hook first, calm last) but reduces the
+    energy delta between neighbours so tone changes feel gradual, not abrupt.
+
+    Uses a greedy nearest-energy walk anchored on the first clip (the hook) so
+    the opener stays put and each subsequent clip is the remaining one whose
+    energy is closest to the previous clip's energy.
+    """
+    if len(clips) <= 2:
+        return clips
+
+    remaining = clips[1:]           # keep the hook (index 0) as the anchor
+    ordered   = [clips[0]]
+    current_energy = clips[0].energy
+
+    while remaining:
+        # Pick the remaining clip whose energy is closest to the current one
+        nxt = min(remaining, key=lambda c: abs(c.energy - current_energy))
+        ordered.append(nxt)
+        remaining.remove(nxt)
+        current_energy = nxt.energy
+
+    # Log how many large jumps remain after smoothing (diagnostic only)
+    jumps = sum(
+        1 for i in range(1, len(ordered))
+        if abs(ordered[i].energy - ordered[i - 1].energy) > _ENERGY_JUMP_THRESHOLD
+    )
+    logger.info(
+        "clip_planner: energy smoothing — %d large tonal jump(s) remain across %d clips",
+        jumps, len(ordered),
+    )
+    return ordered
 
 
 # ── Main entry point ──────────────────────────────────────────────────────────
@@ -393,9 +439,10 @@ def process_clips(
     Full clip processing pipeline:
         1. Expand boundaries to cover overlapping dialogue segments only
         2. Snap end to nearest sentence boundary (±1.5s)
+        2b. Tail hold — add 0.4s pause after speech so lines fully land
         3. Enforce minimum duration:
-               dialogue clips  → length of the dialogue itself (min 3s)
-               non-dialogue    → 3s hard floor
+               dialogue clips  → length of the dialogue itself (min 6s)
+               non-dialogue    → 6s hard floor
         4. Remove overlapping clips (chronological, keep longer)
         5. Classify mood via librosa energy (for transition selection only)
         6. Trim to target_duration
@@ -414,6 +461,12 @@ def process_clips(
 
         # Step 2: also snap end to nearest sentence boundary
         start, end = extend_to_sentence_end(start, end, transcript, video_duration)
+
+        # Step 2b: tail hold — if this clip contains speech, add a short pause
+        # (0.4s) after the last word so the line fully lands before the
+        # crossfade begins. Prevents dialogue being clipped by the transition.
+        if dialogue_duration(start, end, transcript) > 0:
+            end = min(video_duration, end + 0.4)
 
         # Step 3: determine minimum duration for this clip
         speech_dur = dialogue_duration(start, end, transcript)

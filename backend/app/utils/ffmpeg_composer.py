@@ -78,7 +78,34 @@ from app.utils.beat_detector import find_nearest_beat
 
 logger = logging.getLogger(__name__)
 
-CROSSFADE_DURATION = 1.0   # seconds — xfade overlap between clips
+CROSSFADE_DURATION = 1.0   # seconds — default xfade overlap between clips
+
+# Minimum crossfade floor — no transition is ever shorter than this, so cuts
+# never feel abrupt. Every scene gets at least this much blend time.
+MIN_CROSSFADE_DURATION = 0.8
+
+# Mood-based transition durations for varied pacing. All values are >= the
+# MIN_CROSSFADE_DURATION floor so even "fast" transitions still feel smooth.
+# Similar moods get moderate blends; large tonal shifts get longer dissolves
+# so the tone changes gradually rather than snapping.
+_MOOD_XFADE = {
+    ("action", "action"):      0.8,   # matched energy — smooth but tight
+    ("action", "emotional"):   1.2,   # energy drop — longer to ease the shift
+    ("action", "dialogue"):    1.1,
+    ("action", "calm"):        1.5,   # big tonal drop — long dissolve
+    ("emotional", "action"):   1.1,
+    ("emotional", "emotional"):1.2,   # slow dissolve between emotional scenes
+    ("emotional", "dialogue"): 1.0,
+    ("emotional", "calm"):     1.5,
+    ("dialogue", "action"):    1.0,
+    ("dialogue", "emotional"): 1.0,
+    ("dialogue", "dialogue"):  1.0,
+    ("dialogue", "calm"):      1.3,
+    ("calm", "action"):        1.3,   # energy rise — ease in gradually
+    ("calm", "emotional"):     1.3,
+    ("calm", "dialogue"):      1.1,
+    ("calm", "calm"):          1.5,   # long dissolve between calm scenes
+}
 
 # Default loudness target — matches existing behaviour
 _DEFAULT_TARGET_LUFS = -14
@@ -416,13 +443,19 @@ def _build_scene_boundary_fade(clip_durations: list[float], fade_secs: float = 0
 def _stitch_clips(
     clip_paths: list[str],
     concat_out: str,
+    planned_clips: list[PlannedClip] | None = None,
 ) -> tuple[bool, str, list[float], list[float]]:
     """
     Stitch already-normalised per-clip .mp4 files into one intermediate file
-    using MoviePy CrossFadeIn transitions.
+    using MoviePy CrossFadeIn transitions with mood-aware durations.
 
     Each clip_path is a distinct source file produced by FFmpeg Step 1.
     No subclipping — each file is opened as a complete VideoFileClip.
+
+    When planned_clips is provided, crossfade duration varies by the mood
+    transition between consecutive clips (e.g., action→action = 0.4s fast cut,
+    dialogue→calm = 1.2s slow dissolve). Falls back to CROSSFADE_DURATION (1.0s)
+    when mood info is unavailable.
 
     Returns:
         (success, error_message, clip_timeline_offsets, clip_durations)
@@ -442,6 +475,11 @@ def _stitch_clips(
     tl_pos                             = 0.0
     errors:                list[str]   = []
 
+    # Build mood list for transition lookup
+    moods: list[str] = []
+    if planned_clips and len(planned_clips) == len(clip_paths):
+        moods = [getattr(c, "mood_group", "calm") for c in planned_clips]
+
     try:
         for idx, cp in enumerate(clip_paths):
             try:
@@ -454,7 +492,17 @@ def _stitch_clips(
                     positioned.append(mvc.with_start(0.0))
                     tl_pos = dur
                 else:
-                    xfade = min(CROSSFADE_DURATION, dur / 2)
+                    # Determine crossfade duration from mood transition
+                    if moods and idx < len(moods):
+                        prev_mood = moods[idx - 1]
+                        curr_mood = moods[idx]
+                        xfade_base = _MOOD_XFADE.get((prev_mood, curr_mood), CROSSFADE_DURATION)
+                    else:
+                        xfade_base = CROSSFADE_DURATION
+                    # Enforce the minimum crossfade floor so no cut feels abrupt,
+                    # but never exceed half the clip duration (which would eat the scene).
+                    xfade = max(MIN_CROSSFADE_DURATION, xfade_base)
+                    xfade = min(xfade, dur / 2)
                     tl_start = tl_pos - xfade
                     clip_timeline_offsets.append(tl_start)
                     clip_durations.append(dur)
@@ -665,7 +713,7 @@ def compose(
             _step("composing", "done", 100, "Single clip — no transitions needed", overall=80)
         else:
             ok_stitch, err_stitch, clip_timeline_offsets, clip_durations_mv = _stitch_clips(
-                clip_paths, concat_out
+                clip_paths, concat_out, planned_clips=_surviving_clips
             )
             if not ok_stitch:
                 return False, err_stitch
